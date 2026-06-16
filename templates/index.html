@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Web Statement Generator</title>
+  <link rel="stylesheet" href="./static/styles.css?v=20260527-homepage">
+</head>
+<body class="auth-locked">
+  <div class="page-shell">
+    <header class="topbar panel">
+      <div class="brand-block">
+        <p class="eyebrow">SGHACKER WEB TOOL</p>
+        <h1>Web Statement Generator</h1>
+        <p class="lede">A Python web version of your statement generator, matched to the PHP hosting workflow without changing the Windows desktop app.</p>
+      </div>
+      <div class="topbar-actions">
+        <div class="user-pill">
+          <span id="current-user-label">Not logged in</span>
+          <button type="button" class="ghost-button compact-button" id="logout-btn" hidden>Logout</button>
+        </div>
+        <select id="profile-format-select" class="ghost-select">
+          <option value="">Profile Format</option>
+        </select>
+        <button type="button" class="ghost-button" id="save-profile-format-btn">Save Profile Format</button>
+        <button type="button" class="ghost-button" id="edit-profile-format-btn">Edit Profile Format</button>
+        <button type="button" class="ghost-button" id="delete-profile-format-btn">Delete Profile Format</button>
+        <button type="button" class="ghost-button" id="load-profile-format-btn">Load Profile Format</button>
+        <button type="button" class="ghost-button" id="selftest-btn">Run Self Tests</button>
+        <button type="button" class="primary-button" id="create-stat-btn">Create Stat</button>
+      </div>
+      <div class="profile-format-editor inset-panel" id="profile-format-editor" hidden>
+        <label class="field profile-format-field">
+          <span>Profile Format Name</span>
+          <input type="text" id="profile-format-name-input" placeholder="Enter profile format name">
+        </label>
+        <div class="split-actions profile-format-actions">
+          <button type="button" class="ghost-button compact-button" id="profile-format-editor-save-btn">Save</button>
+          <button type="button" class="ghost-button compact-button" id="profile-format-editor-cancel-btn">Cancel</button>
+        </div>
+      </div>
+      <p class="topbar-meta" id="access-summary-note">Access details appear here after login.</p>
+    </header>
+
+    <main class="workspace">
+      <section class="controls-column">
+        <div class="toolbar panel">
+          <div class="tab-strip" id="tab-strip">
+            <button type="button" class="tab-button is-active" data-target="account-panel">Account</button>
+            <button type="button" class="tab-button" data-target="statement-panel">Statement Rules</button>
+            <button type="button" class="tab-button" data-target="texts-panel">Texts & Names</button>
+            <button type="button" class="tab-button" data-target="holidays-panel">Holidays & Saturdays</button>
+            <button type="button" class="tab-button" data-target="export-panel">Export and Print</button>
+            <button type="button" class="tab-button" data-target="admin-panel">Admin & History</button>
+          </div>
+        </div>
+
+        <form id="statement-form" class="panel form-shell">
+          <section class="form-panel is-active" id="account-panel">
+            <div class="section-head">
+              <h2>Account Details</h2>
+              <p>Customer and account information used in both statement and certificate output.</p>
+            </div>
+            <div class="field-grid two-col">
+              <label class="field"><span>Bank Name</span><input name="bank_name" type="text"></label>
+              <label class="field"><span>Branch</span><input name="branch_name" type="text"></label>
+              <label class="field"><span>Customer Name</span><input name="customer_name" type="text"></label>
+              <label class="field"><span>Account Number</span><input name="account_number" type="text"></label>
+              <label class="field"><span>Account Type</span><input name="account_type" type="text"></label>
+              <label class="field"><span>Member ID</span><input name="member_id" type="text"></label>
+              <label class="field"><span>Currency</span><input name="currency" type="text"></label>
+              <label class="field"><span>Reference No.</span><input name="reference_no" type="text"></label>
+              <label class="field field-span"><span>Customer Address</span><textarea name="customer_address" rows="3"></textarea></label>
+              <label class="field"><span>Opening Date</span><input name="opening_date" type="date"></label>
+            </div>
+          </section>
+
+          <section class="form-panel" id="statement-panel">
+            <div class="section-head">
+              <h2>Statement Rules</h2>
+              <p>Generation controls for dates, balances, interest, tax, cheque sequence, and row descriptions.</p>
+            </div>
+            <div class="field-grid two-col">
+              <label class="field"><span>Start Date</span><input name="start_date" type="date"></label>
+              <label class="field"><span>End Date</span><input name="end_date" type="date"></label>
+              <label class="field"><span>Opening Balance</span><input name="opening_balance" type="number" step="0.01"></label>
+              <label class="field"><span>Target Closing Balance</span><input name="target_closing_balance" type="number" step="0.01"></label>
+              <div class="inset-panel field-span prepend-statement-panel">
+                <div class="section-head compact-section-head">
+                  <h3>Add Statement Before</h3>
+                </div>
+                <div class="field-grid two-col">
+                  <label class="field"><span>Add Previous Statement</span>
+                    <select name="prepend_statement_mode" id="prepend-statement-mode">
+                      <option value="No">No</option>
+                      <option value="Yes">Yes</option>
+                    </select>
+                  </label>
+                  <label class="field" id="prepend-start-date-field" hidden><span>Previous Statement Start Date</span><input name="prepend_start_date" type="date"></label>
+                  <label class="field" id="prepend-anchor-date-field" hidden><span>Present Statement Start Date</span><input name="prepend_anchor_date" type="date"></label>
+                  <label class="field" id="prepend-anchor-balance-field" hidden><span>Present Statement First Balance</span><input name="prepend_anchor_balance" type="number" step="0.01"></label>
+                </div>
+              </div>
+              <label class="field"><span>Minimum Deposit Amount</span><input name="deposit_min_amount" type="number" min="1" step="100"></label>
+              <label class="field"><span>Maximum Deposit Amount</span><input name="deposit_max_amount" type="number" min="1" step="100"></label>
+              <label class="field"><span>Minimum Withdraw Amount</span><input name="withdrawal_min_amount" type="number" min="1" step="100"></label>
+              <label class="field"><span>Maximum Withdraw Amount</span><input name="withdrawal_max_amount" type="number" min="1" step="100"></label>
+              <label class="field"><span>Amount Rounding Type</span>
+                <select name="amount_rounding_mode" id="amount-rounding-mode"></select>
+              </label>
+              <label class="field"><span>Interest Rate (%)</span><input name="interest_rate" type="number" step="0.0001"></label>
+              <label class="field"><span>Tax Rate (%)</span><input name="tax_rate" type="number" step="0.0001"></label>
+              <label class="field"><span>Cheque Start No.</span><input name="cheque_start" type="number" step="1"></label>
+              <label class="field"><span>Include Cheque Column</span>
+                <select name="include_cheque_column">
+                  <option value="Yes">Yes</option>
+                  <option value="No">No</option>
+                </select>
+              </label>
+              <label class="field"><span>Date Column Type</span>
+                <select name="date_column_mode" id="date-column-mode">
+                  <option value="single">Single Date Column</option>
+                  <option value="txn_value">TXN Date + Value Date</option>
+                </select>
+              </label>
+              <label class="field"><span>Last Row Style</span>
+                <select name="closing_row_mode">
+                  <option value="description_only">Only Description</option>
+                  <option value="transaction_allowed">Last Transaction Allowed</option>
+                </select>
+              </label>
+              <label class="field"><span>No. of Rows in Statement</span>
+                <select name="statement_row_mode" id="statement-row-mode">
+                  <option value="auto">Auto</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </label>
+              <label class="field" id="statement-row-count-field" hidden><span>Custom Row Count</span><input name="statement_row_count" type="number" min="10" max="2000" step="1"></label>
+              <input type="hidden" name="transaction_count_mode" id="transaction-count-mode" value="auto">
+              <input type="hidden" name="monthly_transaction_counts" id="monthly-transaction-counts" value="">
+              <div class="field field-span transaction-count-control">
+                <span>Monthly Transaction Count</span>
+                <div class="split-actions">
+                  <button type="button" class="ghost-button compact-button is-active" id="transaction-auto-btn" data-transaction-mode="auto">Auto Transactions</button>
+                  <button type="button" class="ghost-button compact-button" id="transaction-custom-btn" data-transaction-mode="custom">Customized Transactions</button>
+                </div>
+              </div>
+              <div class="inset-panel field-span monthly-transaction-panel" id="monthly-transaction-panel" hidden>
+                <div class="section-head compact-section-head">
+                  <h3>Customized Monthly Transactions</h3>
+                  <p>Enter only deposit and withdrawal transaction counts. Interest and tax rows are added separately.</p>
+                </div>
+                <div class="monthly-transaction-grid" id="monthly-transaction-grid"></div>
+              </div>
+              <label class="field"><span>Optional Seed</span><input name="seed" type="number" step="1"></label>
+              <label class="field"><span>First Date Description</span><input name="first_date_description" type="text"></label>
+              <label class="field"><span>Last Date Description</span><input name="last_date_description" type="text"></label>
+            </div>
+            <div class="info-strip">
+              <p>Deposits stay random, system posting dates are protected, issue date moves to the next working day, blocked dates come from the holiday manager, and custom row count supports long multi-year statements.</p>
+            </div>
+          </section>
+
+          <section class="form-panel" id="texts-panel">
+            <div class="section-head">
+              <h2>Texts & Names</h2>
+              <p>Editable labels, description style, and optional name pools used in transaction descriptions.</p>
+            </div>
+            <div class="field-grid two-col">
+              <label class="field"><span>Deposit Text</span><input name="deposit_text" type="text"></label>
+              <label class="field"><span>Withdrawal Text</span><input name="withdrawal_text" type="text"></label>
+              <label class="field field-span"><span>Extra Text</span><input name="description_extra_text" type="text"></label>
+              <label class="field"><span>Interest Text</span><input name="interest_text" type="text"></label>
+              <label class="field"><span>Tax Text</span><input name="tax_text" type="text"></label>
+              <label class="field"><span>Deposit Description Style</span><select name="deposit_mode" id="deposit-mode"></select></label>
+              <label class="field"><span>Withdrawal Description Style</span><select name="withdrawal_mode" id="withdrawal-mode"></select></label>
+              <label class="field field-span"><span>Deposit Names</span><textarea name="deposit_names" rows="6"></textarea></label>
+              <label class="field field-span"><span>Withdrawal Names</span><textarea name="withdrawal_names" rows="6"></textarea></label>
+            </div>
+          </section>
+
+          <section class="form-panel" id="holidays-panel">
+            <div class="section-head">
+              <h2>Holidays & Saturdays</h2>
+              <p>Old holiday dates are loaded automatically. You can view, add, modify, delete, and restore blocked dates here.</p>
+            </div>
+            <div class="holiday-summary" id="holiday-summary"></div>
+            <div class="holiday-view-bar">
+              <button type="button" class="view-button is-active" data-view="All">All</button>
+              <button type="button" class="view-button" data-view="Holiday">Holiday</button>
+              <button type="button" class="view-button" data-view="Sunday">Sunday</button>
+              <button type="button" class="view-button" data-view="Saturday">Saturday</button>
+            </div>
+            <div class="holiday-editor panel inset-panel">
+              <div class="field-grid editor-grid">
+                <label class="field"><span>Date</span><input type="date" id="holiday-date"></label>
+                <label class="field"><span>Type</span>
+                  <select id="holiday-type">
+                    <option value="Holiday">Holiday</option>
+                    <option value="Sunday">Sunday</option>
+                    <option value="Saturday">Saturday</option>
+                  </select>
+                </label>
+              </div>
+              <div class="editor-actions">
+                <button type="button" class="ghost-button" id="holiday-add-btn">Add</button>
+                <button type="button" class="ghost-button" id="holiday-update-btn">Modify Selected</button>
+                <button type="button" class="ghost-button" id="holiday-delete-btn">Delete Selected</button>
+                <button type="button" class="ghost-button" id="holiday-restore-btn">Restore All Saturdays</button>
+                <button type="button" class="ghost-button" id="holiday-sync-btn">Auto Update Holidays</button>
+              </div>
+            </div>
+            <div class="table-shell short-table">
+              <table class="data-table" id="holiday-table">
+                <thead>
+                  <tr><th>Date</th><th>Type</th></tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+
+            <div class="section-head nested-head">
+              <h3>Interest & Tax Dates</h3>
+              <p>Add custom quarterly posting dates for future years here. Editing these dates will ask for your account password, like holiday changes.</p>
+            </div>
+            <div class="holiday-summary" id="posting-summary"></div>
+            <div class="holiday-editor panel inset-panel">
+              <div class="field-grid editor-grid">
+                <label class="field">
+                  <span>Quarter Period</span>
+                  <select id="posting-period-select"></select>
+                </label>
+                <label class="field"><span>Posting Date</span><input type="date" id="posting-date"></label>
+              </div>
+              <div class="editor-actions">
+                <button type="button" class="ghost-button" id="posting-add-btn">Add</button>
+                <button type="button" class="ghost-button" id="posting-update-btn">Modify Selected</button>
+                <button type="button" class="ghost-button" id="posting-delete-btn">Delete Selected</button>
+                <button type="button" class="ghost-button" id="posting-sync-btn">Update Interest & Tax Dates</button>
+              </div>
+            </div>
+            <div class="table-shell short-table">
+              <table class="data-table" id="posting-table">
+                <thead>
+                  <tr><th>Quarter</th><th>Posting Date</th><th>Source</th></tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="form-panel" id="export-panel">
+            <div class="section-head">
+              <h2>Export and Print</h2>
+              <p>Bundled Excel and Word style templates are already included in this web upload. Print preview and normal exports remain available as a fallback.</p>
+            </div>
+            <div class="field-grid two-col">
+              <label class="field field-span">
+                <span>Template Source</span>
+                <div class="inline-field">
+                  <input name="template_dir" id="template-dir-input" type="text">
+                  <button type="button" class="ghost-button compact-button" id="template-refresh-btn">Refresh</button>
+                </div>
+              </label>
+              <label class="field"><span>Exchange Rate Mode</span><select name="rate_mode" id="rate-mode"></select></label>
+              <label class="field"><span>Rate Type</span><select name="rate_type" id="rate-type"></select></label>
+              <label class="field"><span>Manual USD/NPR Rate</span><input name="manual_rate" type="number" step="0.0001"></label>
+            </div>
+            <div class="link-note">
+              <span>NRB rates page:</span> <a id="nrb-page-link" href="#" target="_blank" rel="noreferrer">Open</a>
+              <span>API docs:</span> <a id="nrb-docs-link" href="#" target="_blank" rel="noreferrer">Open</a>
+            </div>
+            <div class="export-grid">
+              <div class="export-card inset-panel">
+                <h3>Export Statement to Excel</h3>
+                <select id="statement-template-list" size="12"></select>
+                <button type="button" class="primary-button wide-button" id="export-statement-template-btn">Export Selected Statement</button>
+              </div>
+              <div class="export-card inset-panel">
+                <h3>Export Balance Certificate to Word</h3>
+                <select id="certificate-template-list" size="12"></select>
+                <button type="button" class="primary-button wide-button" id="export-certificate-template-btn">Export Selected Certificate</button>
+              </div>
+            </div>
+            <div class="normal-export inset-panel">
+              <div>
+                <h3>Extra Normal Export</h3>
+                <p>Use these if template export is not needed or if the hosting server does not use your desktop Office setup.</p>
+              </div>
+              <div class="split-actions">
+                <button type="button" class="ghost-button" id="export-normal-statement-btn">Export Normal Excel</button>
+                <button type="button" class="ghost-button" id="export-normal-certificate-btn">Export Normal Word</button>
+              </div>
+            </div>
+            <div class="normal-export inset-panel print-export-panel">
+              <div>
+                <h3>Print</h3>
+                <p>Preview or print the current statement or balance certificate on A4 paper.</p>
+              </div>
+              <div class="split-actions">
+                <select id="print-document-kind" class="ghost-select" title="Print document">
+                  <option value="statement">Statement</option>
+                  <option value="certificate">Certificate</option>
+                </select>
+                <select id="print-format-mode" class="ghost-select" title="Print format">
+                  <option value="custom">Customized Format</option>
+                  <option value="normal">Normal Form</option>
+                </select>
+                <button type="button" class="ghost-button" id="print-preview-btn">Print Preview</button>
+                <button type="button" class="primary-button" id="print-current-btn">Print</button>
+              </div>
+            </div>
+            <div class="normal-export inset-panel">
+              <div>
+                <h3>Format Manager</h3>
+                <p>Upload custom statement and certificate format files here to add or replace named formats. Built-in bundled formats stay read-only.</p>
+              </div>
+              <div class="field-grid two-col">
+                <label class="field">
+                  <span>Format Type</span>
+                  <select id="template-manage-kind">
+                    <option value="statement">Statement Format</option>
+                    <option value="certificate">Certificate Format</option>
+                  </select>
+                </label>
+                <label class="field"><span>Custom Format Name</span><input type="text" id="template-manage-name"></label>
+                <label class="field field-span"><span>Upload Excel / Word Format File</span><input type="file" id="template-manage-file" accept=".xlsx,.xls,.docx,.doc"></label>
+              </div>
+              <div class="split-actions">
+                <button type="button" class="ghost-button" id="template-upload-btn">Add or Replace Format</button>
+                <button type="button" class="ghost-button" id="template-scan-btn">Scan Selected Format</button>
+                <button type="button" class="ghost-button" id="template-edit-btn">Edit Selected Format</button>
+                <button type="button" class="ghost-button" id="template-edit-excel-btn">Edit Excel Format</button>
+                <button type="button" class="ghost-button" id="template-edit-word-btn">Edit Word Format</button>
+                <button type="button" class="ghost-button" id="template-save-profile-btn">Save Details To Selected Format</button>
+                <button type="button" class="primary-button" id="statement-format-builder-open-btn">Create Statement Format</button>
+                <button type="button" class="ghost-button" id="template-delete-btn">Delete Selected Format</button>
+              </div>
+              <p class="admin-subnote">The Python web app uploads real `.xlsx/.xls` statement templates and `.docx/.doc` certificate templates. Custom `.xlsx/.docx` files can be scanned and lightly edited in the browser.</p>
+              <div class="template-editor inset-panel" id="template-editor-panel" hidden>
+                <div class="template-editor-head">
+                  <div>
+                    <h3>Scanned Format Editor</h3>
+                    <p id="template-scan-summary">Select a format and scan it to see active cells, text blocks, and formatting.</p>
+                  </div>
+                  <button type="button" class="ghost-button compact-button" id="template-editor-close-btn">Close</button>
+                </div>
+                <div class="field-grid two-col">
+                  <label class="field field-span">
+                    <span>Scanned Cell / Text Block</span>
+                    <select id="template-item-select" size="8"></select>
+                  </label>
+                  <label class="field field-span"><span>Cell / Line Text</span><textarea id="template-item-text" rows="3"></textarea></label>
+                  <label class="field"><span>Text Alignment</span>
+                    <select id="template-item-align">
+                      <option value="">Keep Existing</option>
+                      <option value="left">Left</option>
+                      <option value="center">Center</option>
+                      <option value="right">Right</option>
+                      <option value="justify">Justify</option>
+                    </select>
+                  </label>
+                  <label class="field"><span>Vertical Alignment</span>
+                    <select id="template-item-vertical">
+                      <option value="">Keep Existing</option>
+                      <option value="top">Top</option>
+                      <option value="center">Middle</option>
+                      <option value="bottom">Bottom</option>
+                    </select>
+                  </label>
+                  <label class="field"><span>Font Size</span><input type="text" id="template-item-font-size" placeholder="Example: 11"></label>
+                  <label class="field"><span>Number / Cell Format</span><input type="text" id="template-item-number-format" placeholder="Example: yyyy-mm-dd or #,##0.00"></label>
+                  <label class="field"><span>Text Color</span><input type="color" id="template-item-color" value="#16324a"></label>
+                  <label class="field"><span>Fill Color</span><input type="color" id="template-item-bg" value="#ffffff"></label>
+                  <label class="field"><span>Bold</span>
+                    <select id="template-item-bold">
+                      <option value="">Keep Existing</option>
+                      <option value="true">Bold</option>
+                      <option value="false">Normal</option>
+                    </select>
+                  </label>
+                  <label class="field"><span>Italic / Underline</span>
+                    <select id="template-item-decoration">
+                      <option value="">Keep Existing</option>
+                      <option value="italic">Italic</option>
+                      <option value="underline">Underline</option>
+                      <option value="normal">Normal</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="split-actions">
+                  <button type="button" class="primary-button" id="template-item-save-btn">Save Cell / Line Formatting</button>
+                  <button type="button" class="ghost-button" id="template-item-rescan-btn">Refresh Scan</button>
+                </div>
+              </div>
+              <div class="template-editor inset-panel" id="statement-format-builder-panel" hidden>
+                <div class="template-editor-head">
+                  <div>
+                    <h3>Create Statement Format</h3>
+                    <p>Build a simple Excel-like statement format with top details, transaction headings, optional total, summary, and balance-in-words sections.</p>
+                  </div>
+                  <button type="button" class="ghost-button compact-button" id="statement-format-builder-close-btn">Close</button>
+                </div>
+                <div class="field-grid two-col">
+                  <label class="field"><span>New Format Name</span><input type="text" id="builder-format-name" placeholder="Example: My New Statement"></label>
+                  <label class="field"><span>Transaction Rows</span><input type="number" id="builder-transaction-rows" value="55" min="10" max="1000"></label>
+                  <label class="field field-span"><span>Statement Headings</span><input type="text" id="builder-headers" value="Date, Description, Cheque No., Debit, Credit, Balance"></label>
+                  <label class="field"><span>Total Section</span>
+                    <select id="builder-include-total"><option value="no">No</option><option value="yes">Yes</option></select>
+                  </label>
+                  <label class="field"><span>Transaction Summary Section</span>
+                    <select id="builder-include-summary"><option value="yes">Yes</option><option value="no">No</option></select>
+                  </label>
+                </div>
+                <div class="split-actions">
+                  <button type="button" class="primary-button" id="statement-format-builder-save-btn">Save New Statement Format</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="form-panel" id="admin-panel">
+            <div class="section-head">
+              <h2>Admin & History</h2>
+              <p>Admin can create users, change user passwords, delete users, and review saved statement history by selected user here.</p>
+            </div>
+            <div class="admin-layout">
+              <div class="inset-panel" id="admin-create-card">
+                <h3>Create User</h3>
+                <div class="field-grid two-col">
+                  <label class="field"><span>Username</span><input type="text" id="new-user-username"></label>
+                  <label class="field"><span>Password</span><input type="password" id="new-user-password"></label>
+                  <label class="field"><span>Name *</span><input type="text" id="new-user-full-name"></label>
+                  <label class="field"><span>Mobile Number *</span><input type="text" id="new-user-mobile"></label>
+                  <label class="field field-span"><span>Address</span><input type="text" id="new-user-address"></label>
+                  <label class="field"><span>Email</span><input type="email" id="new-user-email"></label>
+                  <label class="field"><span>Gender</span>
+                    <select id="new-user-gender">
+                      <option value="">Select</option>
+                      <option value="Male">Male</option>
+                      <option value="Female">Female</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </label>
+                  <label class="field"><span>Role</span>
+                    <select id="new-user-role">
+                      <option value="user">User</option>
+                      <option value="super_admin">Super Admin</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                  </label>
+                  <label class="field"><span>User Access Type</span>
+                    <select id="new-user-access-mode">
+                      <option value="limited">Limited Statements</option>
+                      <option value="monthly">Monthly Quota</option>
+                      <option value="yearly">Yearly Quota</option>
+                      <option value="time">Time Based</option>
+                      <option value="check_only">Statement Check User</option>
+                      <option value="unlimited">Unlimited</option>
+                    </select>
+                  </label>
+                  <label class="field"><span>Allowed Statements</span><input type="number" step="1" id="new-user-remaining-statements"></label>
+                  <label class="field"><span>Valid Until</span><input type="date" id="new-user-valid-until"></label>
+                </div>
+                <button type="button" class="primary-button" id="create-user-btn">Create User</button>
+              </div>
+              <div class="inset-panel" id="admin-manage-card">
+                <h3>User Management</h3>
+                <div class="field-grid two-col">
+                  <label class="field field-span">
+                    <span>Select User</span>
+                    <input type="search" id="manage-user-search" placeholder="Search username, name, mobile, email">
+                    <select id="manage-user-select"></select>
+                  </label>
+                  <label class="field"><span>New Password</span><input type="password" id="manage-user-password"></label>
+                  <label class="field"><span>Access Type</span>
+                    <select id="manage-user-access-mode">
+                      <option value="limited">Limited Statements</option>
+                      <option value="monthly">Monthly Quota</option>
+                      <option value="yearly">Yearly Quota</option>
+                      <option value="time">Time Based</option>
+                      <option value="check_only">Statement Check User</option>
+                      <option value="unlimited">Unlimited</option>
+                    </select>
+                  </label>
+                  <label class="field"><span>Allowed Statements</span><input type="number" step="1" id="manage-user-remaining-statements"></label>
+                  <label class="field"><span>Valid Until</span><input type="date" id="manage-user-valid-until"></label>
+                  <div class="admin-help">
+                    <p>Password, access updates, and delete actions will ask for your current admin password before saving.</p>
+                  </div>
+                </div>
+              <div class="split-actions admin-actions">
+                  <button type="button" class="ghost-button" id="view-user-history-btn">View Statements</button>
+                  <button type="button" class="ghost-button" id="view-all-history-btn">Show All</button>
+                  <button type="button" class="ghost-button" id="change-user-password-btn">Change Password</button>
+                  <button type="button" class="ghost-button" id="update-user-access-btn">Renew / Update Access</button>
+                  <button type="button" class="ghost-button" id="delete-user-btn">Delete User</button>
+                </div>
+              </div>
+              <div class="inset-panel" id="admin-restore-dates-card">
+                <h3>Restore User Date Rules</h3>
+                <p class="admin-subnote">Select a user above, then restore only that user's saved Saturday, holiday, Sunday, or interest/tax date setup.</p>
+                <label class="field">
+                  <span>Restore Type</span>
+                  <select id="restore-date-part">
+                    <option value="holidays">Holidays Only</option>
+                    <option value="saturdays">Saturdays Only</option>
+                    <option value="sundays">Sundays Only</option>
+                    <option value="posting_dates">Interest & Tax Dates</option>
+                    <option value="all">All Date Rules</option>
+                  </select>
+                </label>
+                <button type="button" class="ghost-button" id="restore-user-dates-btn">Restore Selected User Dates</button>
+              </div>
+            </div>
+            <div class="inset-panel" id="admin-users-card">
+              <h3>Users</h3>
+              <div class="table-shell short-table">
+                <table class="data-table" id="users-table">
+                  <thead><tr><th>Username</th><th>Name</th><th>Mobile</th><th>Role</th><th>Access</th><th>Remaining</th><th>Valid Until</th><th>Devices</th><th>Created</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="inset-panel" id="devices-card">
+              <div class="history-head">
+                <h3>Saved Devices</h3>
+                <button type="button" class="ghost-button compact-button" id="refresh-devices-btn">Refresh Devices</button>
+              </div>
+              <p class="admin-subnote" id="device-target-label">Saved devices for the current user will appear here.</p>
+              <div class="table-shell short-table">
+                <table class="data-table" id="devices-table">
+                  <thead><tr><th>Device Serial</th><th>Device</th><th>Created</th><th>Last Login</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <div class="split-actions admin-actions">
+                <button type="button" class="ghost-button" id="remove-device-btn">Remove Selected Device</button>
+              </div>
+            </div>
+            <div class="inset-panel" id="admin-counts-card">
+              <h3>Statement Counts</h3>
+              <p class="admin-subnote" id="history-filter-label">Showing statement history for all visible users.</p>
+              <div class="table-shell short-table">
+                <table class="data-table" id="counts-table">
+                  <thead><tr><th>User</th><th>Statements</th><th>Access</th><th>Remaining</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="inset-panel">
+              <div class="history-head">
+                <h3>Saved Statement History</h3>
+                <button type="button" class="ghost-button compact-button" id="refresh-history-btn">Refresh History</button>
+              </div>
+              <p class="admin-subnote" id="history-total-label">Saved statements will appear here after generation.</p>
+              <div class="table-shell short-table">
+                <table class="data-table" id="history-table">
+                  <thead>
+                    <tr><th>ID</th><th>User</th><th>Customer</th><th>Period</th><th>Issue</th><th>Rows</th><th>Balance</th><th>Seed</th><th>Created</th><th>Action</th></tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="inset-panel">
+              <div class="history-head">
+                <h3>User Activities</h3>
+                <button type="button" class="ghost-button compact-button" id="refresh-activities-btn">Refresh Activities</button>
+              </div>
+              <div class="table-shell short-table">
+                <table class="data-table" id="activities-table">
+                  <thead><tr><th>Time</th><th>User</th><th>Action</th><th>Details</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+        </form>
+      </section>
+
+      <aside class="preview-column">
+        <section class="panel format-workspace-panel" id="format-workspace-panel" hidden>
+          <div class="format-workspace-head">
+            <div class="section-head">
+              <h2 id="format-workspace-title">Format Workspace</h2>
+              <p id="format-workspace-summary">Open an Excel or Word format to edit it visually inside this right-side workspace.</p>
+            </div>
+            <button type="button" class="ghost-button compact-button" id="format-workspace-close-btn">Close Editor</button>
+          </div>
+          <div class="format-toolbar">
+            <label class="field">
+              <span>Insert Object</span>
+              <select id="format-object-select"></select>
+            </label>
+            <label class="field field-span">
+              <span>Selected Cell / Text / Formula</span>
+              <input type="text" id="format-formula-input" placeholder="Click a cell, type direct text, {{customer_name}}, or =SUM(D20:D55)">
+            </label>
+            <div class="split-actions format-toolbar-actions">
+              <button type="button" class="ghost-button" id="format-insert-object-btn">Put Object In Cell</button>
+              <button type="button" class="ghost-button" id="format-generated-preview-btn">Show Generated Format</button>
+              <button type="button" class="primary-button" id="format-save-cell-btn">Save Selected Cell</button>
+              <button type="button" class="ghost-button" id="format-save-original-btn">Save To Original Format</button>
+            </div>
+          </div>
+          <div class="format-ribbon" id="format-ribbon">
+            <div class="ribbon-group">
+              <span class="ribbon-label">Font</span>
+              <select id="format-font-family" title="Font family">
+                <option value="">Keep Font</option>
+                <option value="Aptos">Aptos</option>
+                <option value="Calibri">Calibri</option>
+                <option value="Arial">Arial</option>
+                <option value="Cambria">Cambria</option>
+                <option value="Times New Roman">Times New Roman</option>
+                <option value="Verdana">Verdana</option>
+              </select>
+              <input type="number" id="format-font-size" title="Font size" min="6" max="72" step="1" placeholder="Size">
+              <button type="button" class="ribbon-button" data-format-command="fontGrow" title="Increase font size">A↑</button>
+              <button type="button" class="ribbon-button" data-format-command="fontShrink" title="Decrease font size">A↓</button>
+              <button type="button" class="ribbon-button" data-format-command="changeCase" title="Change case">Aa</button>
+              <button type="button" class="ribbon-button" data-format-command="clear" title="Clear formatting">⌫</button>
+              <button type="button" class="ribbon-button" data-format-command="bold" title="Bold">𝐁</button>
+              <button type="button" class="ribbon-button" data-format-command="italic" title="Italic">𝐼</button>
+              <button type="button" class="ribbon-button" data-format-command="underline" title="Underline">U̲</button>
+              <button type="button" class="ribbon-button" data-format-command="strike" title="Strikethrough">S̶</button>
+              <button type="button" class="ribbon-button" data-format-command="subscript" title="Subscript">x₂</button>
+              <button type="button" class="ribbon-button" data-format-command="superscript" title="Superscript">x²</button>
+              <label class="ribbon-color">Text <input type="color" id="format-font-color" value="#16324a"></label>
+              <label class="ribbon-color">Fill <input type="color" id="format-fill-color" value="#ffffff"></label>
+            </div>
+            <div class="ribbon-group">
+              <span class="ribbon-label">Paragraph / Alignment</span>
+              <button type="button" class="ribbon-button" data-format-command="alignLeft" title="Align left">≡◂</button>
+              <button type="button" class="ribbon-button" data-format-command="alignCenter" title="Center">≡</button>
+              <button type="button" class="ribbon-button" data-format-command="alignRight" title="Align right">▸≡</button>
+              <button type="button" class="ribbon-button" data-format-command="alignJustify" title="Justify">☷</button>
+              <select id="format-vertical-align" title="Vertical alignment">
+                <option value="">Vertical</option>
+                <option value="top">Top</option>
+                <option value="center">Middle</option>
+                <option value="bottom">Bottom</option>
+              </select>
+              <button type="button" class="ribbon-button" data-format-command="bullet" title="Bullets">•≡</button>
+              <button type="button" class="ribbon-button" data-format-command="numbering" title="Numbering">1≡</button>
+              <button type="button" class="ribbon-button" data-format-command="outdent" title="Decrease indent">⇤</button>
+              <button type="button" class="ribbon-button" data-format-command="indent" title="Increase indent">⇥</button>
+              <button type="button" class="ribbon-button" data-format-command="wrap" title="Wrap text">↩</button>
+              <select id="format-line-spacing" title="Line spacing">
+                <option value="">Line Spacing</option>
+                <option value="1">1.0</option>
+                <option value="1.15">1.15</option>
+                <option value="1.5">1.5</option>
+                <option value="2">2.0</option>
+              </select>
+              <button type="button" class="ribbon-button" data-format-command="sortText" title="Sort selected lines">A↓</button>
+              <button type="button" class="ribbon-button" data-format-command="showMarks" title="Show paragraph marks">¶</button>
+            </div>
+            <div class="ribbon-group">
+              <span class="ribbon-label">Excel Cell / Number</span>
+              <button type="button" class="ribbon-button" id="format-merge-center-btn" title="Merge selected cells and center">⇔</button>
+              <button type="button" class="ribbon-button" id="format-unmerge-btn" title="Unmerge selected merged cell">Split</button>
+              <select id="format-border-style" title="Borders">
+                <option value="">No Border Change</option>
+                <option value="thin">All Thin Borders</option>
+                <option value="medium">All Medium Borders</option>
+                <option value="outside">Outside Border</option>
+                <option value="top">Top Border</option>
+                <option value="bottom">Bottom Border</option>
+                <option value="left">Left Border</option>
+                <option value="right">Right Border</option>
+                <option value="none">No Border</option>
+              </select>
+              <select id="format-number-format" title="Number format">
+                <option value="">Number Format</option>
+                <option value="General">General</option>
+                <option value="#,##0.00">Number</option>
+                <option value="#,##0.00;[Red]-#,##0.00">Accounting</option>
+                <option value="$#,##0.00">$ Currency</option>
+                <option value="0.00%">Percent</option>
+                <option value="#,##0">Comma</option>
+                <option value="yyyy-mm-dd">Date</option>
+              </select>
+              <button type="button" class="ribbon-button" data-format-command="currency" title="Currency">$</button>
+              <button type="button" class="ribbon-button" data-format-command="percent" title="Percent">%</button>
+              <button type="button" class="ribbon-button" data-format-command="comma" title="Comma style">,</button>
+              <button type="button" class="ribbon-button" data-format-command="decimalIncrease" title="Increase decimals">.00→</button>
+              <button type="button" class="ribbon-button" data-format-command="decimalDecrease" title="Decrease decimals">←.0</button>
+            </div>
+          </div>
+          <div class="format-ruler" id="format-ruler" aria-label="Word ruler and paragraph indent controls">
+            <span class="ruler-label">Ruler</span>
+            <div class="ruler-marker-track" aria-hidden="true">
+              <span class="ruler-marker ruler-marker-tab" id="format-left-tab-marker">L</span>
+              <span class="ruler-marker ruler-marker-indent" id="format-left-indent-marker">I</span>
+              <span class="ruler-marker ruler-marker-first" id="format-first-indent-marker">I</span>
+            </div>
+            <label title="Left tab stop"><span>Tab</span><input type="range" id="format-left-tab" min="0" max="144" step="6" value="0"></label>
+            <label title="Left indent"><span>Left</span><input type="range" id="format-left-indent" min="0" max="144" step="6" value="0"></label>
+            <label title="First line indent"><span>First</span><input type="range" id="format-first-indent" min="-72" max="144" step="6" value="0"></label>
+            <div class="ruler-scale" aria-hidden="true"><span>0</span><span>1"</span><span>2"</span><span>3"</span><span>4"</span><span>5"</span></div>
+          </div>
+          <div class="format-selected-note" id="format-selected-cell">No cell selected.</div>
+          <div class="format-save-status" id="format-save-status" aria-live="polite"></div>
+          <div class="format-sheet-shell" id="format-sheet-host"></div>
+          <p class="admin-subnote">Tip: formulas beginning with <code>=</code> are saved in Excel cells. Object tokens like <code>{{customer_name}}</code> are easy placeholders for exported formats.</p>
+        </section>
+
+        <section class="panel summary-panel">
+          <div class="section-head">
+            <h2>Summary</h2>
+            <p>Generate a statement to preview totals, dates, and transaction rows before exporting.</p>
+          </div>
+          <div class="summary-grid">
+            <article class="summary-card"><span>Final Balance</span><strong id="summary-final-balance">-</strong></article>
+            <article class="summary-card"><span>Issue Date</span><strong id="summary-issue-date">-</strong></article>
+            <article class="summary-card"><span>Rows</span><strong id="summary-row-count">-</strong></article>
+            <article class="summary-card"><span>Target Gap</span><strong id="summary-target-gap">-</strong></article>
+            <article class="summary-card"><span>Total Deposits</span><strong id="summary-total-deposits">-</strong></article>
+            <article class="summary-card"><span>Total Withdrawals</span><strong id="summary-total-withdrawals">-</strong></article>
+            <article class="summary-card"><span>Interest</span><strong id="summary-total-interest">-</strong></article>
+            <article class="summary-card"><span>Tax</span><strong id="summary-total-tax">-</strong></article>
+            <article class="summary-card"><span>Seed Used</span><strong id="summary-seed-used">-</strong></article>
+          </div>
+        </section>
+
+        <section class="panel preview-panel">
+          <div class="preview-head">
+            <div class="section-head">
+              <h2>Statement Preview</h2>
+              <p>The generated statement rows appear here and can be loaded, edited, recalculated, and exported from the same screen.</p>
+            </div>
+            <div class="preview-actions">
+              <button type="button" class="ghost-button" id="import-statement-btn">Import Statement</button>
+              <button type="button" class="ghost-button" id="validate-statement-btn">Check Statement</button>
+              <button type="button" class="ghost-button" id="edit-statement-btn">Edit Statement</button>
+              <button type="button" class="primary-button" id="update-statement-btn" disabled>Update & Recalculate</button>
+              <button type="button" class="ghost-button" id="cancel-edit-btn" disabled>Cancel Edit</button>
+            </div>
+          </div>
+          <div class="info-strip preview-edit-note" id="preview-edit-note" hidden>
+            Edit mode is active. You can change dates, description, cheque, debit, and credit on non-interest/tax rows. Balance recalculates automatically after Update & Recalculate.
+          </div>
+          <input type="file" id="import-statement-file" accept=".xlsx" hidden>
+          <div class="table-shell preview-table-shell">
+            <table class="data-table" id="preview-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Description</th>
+                  <th>Cheque No.</th>
+                  <th>Debit</th>
+                  <th>Credit</th>
+                  <th>Balance</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="validation-panel" id="validation-panel" hidden>
+            <strong>Statement Check</strong>
+            <div id="validation-errors" class="validation-errors"></div>
+          </div>
+        </section>
+
+        <section class="panel log-panel">
+          <div class="section-head">
+            <h2>Status Log</h2>
+            <p>Generation, rule changes, export results, and self-test messages are listed here.</p>
+          </div>
+          <div id="status-log" class="status-log" aria-live="polite"></div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <div class="login-overlay" id="login-overlay">
+    <main class="home-landing" aria-labelledby="home-title">
+      <section class="home-hero" aria-label="Statement generator overview">
+        <div class="home-copy">
+          <div class="home-brand">
+            <span class="home-mark">SG</span>
+            <span>Web Statement Generator</span>
+          </div>
+          <h2 id="home-title"><span>Create clean</span><span>statements with</span><span>editable rules</span><span>and export-ready</span><span>formats.</span></h2>
+          <p>Generate bank statements and balance certificates with custom deposit and withdraw limits, protected posting dates, profile formats, print preview, Excel export, and Word certificate output in one focused workspace.</p>
+          <div class="home-actions">
+            <a class="primary-button home-login-link" href="#login-username">Open Generator</a>
+            <a class="ghost-button home-login-link" href="#home-capabilities">View Features</a>
+          </div>
+        </div>
+        <div class="home-product panel" aria-label="Generator workflow preview">
+          <div class="home-product-head">
+            <span>Statement Workflow</span>
+            <strong>Ready</strong>
+          </div>
+          <div class="home-rule-grid">
+            <div><span>Amount Rules</span><strong>Min / Max</strong></div>
+            <div><span>Rounding</span><strong>1000 / 500 / 100</strong></div>
+            <div><span>Dates</span><strong>Holiday Safe</strong></div>
+            <div><span>Output</span><strong>Excel + Word</strong></div>
+          </div>
+          <div class="home-statement-preview">
+            <div><span>2026-01-14</span><strong>Cash Deposit</strong><em>85,000.00</em></div>
+            <div><span>2026-01-15</span><strong>Cheque Withdrawal</strong><em>24,500.00</em></div>
+            <div><span>2026-01-16</span><strong>Balance C/F</strong><em>2,550,018.15</em></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="home-auth-row">
+        <div class="login-card panel">
+          <h2>Sign in to continue</h2>
+          <p class="login-note">Use your assigned username and password to open the generator workspace.</p>
+          <label class="field"><span>Username</span><input type="text" id="login-username" autocomplete="username"></label>
+          <label class="field"><span>Password</span><div class="password-field"><input type="password" id="login-password" autocomplete="current-password"><button type="button" class="password-toggle" id="login-password-toggle" aria-label="Show password">Show</button></div></label>
+          <button type="button" class="primary-button wide-button" id="login-btn">Login</button>
+          <p class="login-error" id="login-error"></p>
+        </div>
+        <div class="home-capabilities" id="home-capabilities" aria-label="Core features">
+          <article>
+            <h3>Custom Statement Rules</h3>
+            <p>Control balances, row counts, amount limits, rounding style, names, text labels, and cheque behavior before generation.</p>
+          </article>
+          <article>
+            <h3>Template-Based Exports</h3>
+            <p>Use bundled or uploaded formats for Excel statements and Word certificates while keeping preview and print workflows close by.</p>
+          </article>
+          <article>
+            <h3>Date Protection</h3>
+            <p>Keep transactions away from holidays, Saturdays, and protected interest or tax posting dates with editable calendar rules.</p>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="login-overlay" id="password-modal-overlay">
+    <div class="login-card panel password-modal-card">
+      <p class="eyebrow">Verification</p>
+      <h2 id="password-modal-title">Enter Password</h2>
+      <p class="login-note" id="password-modal-message">Confirm this action with your password.</p>
+      <label class="field"><span>Password</span><div class="password-field"><input type="password" id="password-modal-input" autocomplete="current-password"><button type="button" class="password-toggle" id="password-modal-toggle" aria-label="Show password">Show</button></div></label>
+      <div class="split-actions">
+        <button type="button" class="ghost-button" id="password-modal-cancel">Cancel</button>
+        <button type="button" class="primary-button" id="password-modal-confirm">Confirm</button>
+      </div>
+      <p class="login-error" id="password-modal-error"></p>
+    </div>
+  </div>
+
+  <script type="module" src="./static/app.js?v=20260527-homepage"></script>
+</body>
+</html>

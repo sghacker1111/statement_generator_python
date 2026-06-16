@@ -1,0 +1,29 @@
+# Python/cache files
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Local runtime state
+*.log
+._*
+web_statement_generator.db
+web_statement_generator_state.json
+user_state/
+custom_templates/
+_web_runtime_temp/
+_web_temp/
+
+# Local/generated profiles
+statement_generator/*_statement_profile.json
+
+# Bundled/local dependencies
+.deps/
+.vendor/
+venv/
+.venv/
+
+# Editor/OS files
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
