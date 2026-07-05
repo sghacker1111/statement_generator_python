@@ -8,6 +8,7 @@ __pycache__/
 ._*
 web_statement_generator.db
 web_statement_generator_state.json
+login_attempts.json
 user_state/
 custom_templates/
 _web_runtime_temp/

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import mimetypes
 import re
@@ -8,6 +9,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import traceback
 import urllib.request
 import webbrowser
@@ -119,6 +121,10 @@ AMOUNT_ROUNDING_OPTIONS = {
 DEFAULT_DEPOSIT_NAMES = "Self\nKaruna\nKrishna\nManisha"
 DEFAULT_WITHDRAWAL_NAMES = "Self\nKabita Thapa\nKamala Pandey"
 STATE_LOCK = threading.Lock()
+LOGIN_ATTEMPT_FILE = APP_ROOT / "login_attempts.json"
+LOGIN_ATTEMPT_LOCK = threading.Lock()
+LOGIN_MAX_FAILURES = 6
+LOGIN_WINDOW_SECONDS = 900
 WEB_TEMP_ROOT = APP_ROOT / "_web_runtime_temp"
 CUSTOM_TEMPLATE_ROOT = APP_ROOT / "custom_templates"
 HIDDEN_TEMPLATE_FILE = "_hidden_templates.json"
@@ -3125,6 +3131,67 @@ def extract_bearer_token(headers) -> str:
     return ""
 
 
+def _read_login_attempts() -> dict[str, object]:
+    if not LOGIN_ATTEMPT_FILE.exists():
+        return {}
+    try:
+        payload = json.loads(LOGIN_ATTEMPT_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_login_attempts(attempts: dict[str, object]) -> None:
+    LOGIN_ATTEMPT_FILE.write_text(json.dumps(attempts, indent=2), encoding="utf-8")
+
+
+def _login_attempt_key(client_ip: str, username: str) -> str:
+    normalized_user = username.strip().lower()
+    return hashlib.sha256(f"{client_ip}|{normalized_user}".encode("utf-8")).hexdigest()
+
+
+def assert_login_not_rate_limited(client_ip: str, username: str) -> None:
+    with LOGIN_ATTEMPT_LOCK:
+        attempts = _read_login_attempts()
+        now = int(time.time())
+        key = _login_attempt_key(client_ip, username)
+        record = attempts.get(key) if isinstance(attempts.get(key), dict) else {}
+        locked_until = int(record.get("locked_until", 0) or 0)
+        if locked_until > now:
+            minutes = max(1, -(-(locked_until - now) // 60))
+            raise PermissionError(
+                f"Too many failed login attempts. Try again after {minutes} minute(s)."
+            )
+        failures = [
+            int(ts)
+            for ts in record.get("failures", [])
+            if str(ts).lstrip("-").isdigit() and int(ts) >= now - LOGIN_WINDOW_SECONDS
+        ]
+        attempts[key] = {"failures": failures, "locked_until": 0}
+        _write_login_attempts(attempts)
+
+
+def record_login_attempt(client_ip: str, username: str, success: bool) -> None:
+    with LOGIN_ATTEMPT_LOCK:
+        attempts = _read_login_attempts()
+        key = _login_attempt_key(client_ip, username)
+        if success:
+            attempts.pop(key, None)
+            _write_login_attempts(attempts)
+            return
+        now = int(time.time())
+        record = attempts.get(key) if isinstance(attempts.get(key), dict) else {}
+        failures = [
+            int(ts)
+            for ts in record.get("failures", [])
+            if str(ts).lstrip("-").isdigit() and int(ts) >= now - LOGIN_WINDOW_SECONDS
+        ]
+        failures.append(now)
+        locked_until = now + LOGIN_WINDOW_SECONDS if len(failures) >= LOGIN_MAX_FAILURES else 0
+        attempts[key] = {"failures": failures, "locked_until": locked_until}
+        _write_login_attempts(attempts)
+
+
 def build_user_workspace_payload(current_user: AuthUser, start_date: str, end_date: str) -> dict[str, object]:
     return {
         "current_user": current_user.as_payload(),
@@ -3162,11 +3229,11 @@ class StatementWebHandler(BaseHTTPRequestHandler):
                 return
             if route.startswith("/static/"):
                 relative = route.removeprefix("/static/")
-                self._serve_file(APP_ROOT / "static" / relative)
+                self._serve_file(APP_ROOT / "static" / relative, base=APP_ROOT / "static")
                 return
             if route.startswith("/site_integration/"):
                 relative = route.removeprefix("/site_integration/")
-                self._serve_file(APP_ROOT / "site_integration" / relative)
+                self._serve_file(APP_ROOT / "site_integration" / relative, base=APP_ROOT / "site_integration")
                 return
             if route == "/api/bootstrap":
                 current_user = self._require_user()
@@ -3284,12 +3351,23 @@ class StatementWebHandler(BaseHTTPRequestHandler):
 
             if route == "/api/login":
                 payload = self._read_json_body()
-                session = auth_store().login(
-                    str(payload.get("username", "")),
-                    str(payload.get("password", "")),
-                    str(payload.get("device_id", "")),
-                    str(payload.get("device_label", "")),
-                )
+                username = str(payload.get("username", ""))
+                client_ip = self._client_ip()
+                assert_login_not_rate_limited(client_ip, username)
+                try:
+                    session = auth_store().login(
+                        username,
+                        str(payload.get("password", "")),
+                        str(payload.get("device_id", "")),
+                        str(payload.get("device_label", "")),
+                    )
+                except ValueError:
+                    # Only invalid-credential failures count toward the lockout,
+                    # mirroring the PHP app. Device-limit rejections raise
+                    # PermissionError and are intentionally not recorded here.
+                    record_login_attempt(client_ip, username, False)
+                    raise
+                record_login_attempt(client_ip, username, True)
                 self._send_json(
                     {
                         "token": session["token"],
@@ -3818,6 +3896,44 @@ class StatementWebHandler(BaseHTTPRequestHandler):
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
+    def _client_ip(self) -> str:
+        forwarded = str(self.headers.get("CF-Connecting-IP", "")).strip()
+        if forwarded:
+            return forwarded
+        try:
+            return str(self.client_address[0])
+        except Exception:
+            return "unknown"
+
+    def _security_headers(self) -> None:
+        csp = "; ".join(
+            [
+                "default-src 'self'",
+                "script-src 'self'",
+                "style-src 'self' 'unsafe-inline'",
+                "img-src 'self' data:",
+                "font-src 'self' data:",
+                "connect-src 'self'",
+                "object-src 'none'",
+                "base-uri 'self'",
+                "form-action 'self'",
+                "frame-ancestors 'none'",
+            ]
+        )
+        self.send_header("Content-Security-Policy", csp)
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header(
+            "Permissions-Policy",
+            "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()",
+        )
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        self.send_header("X-Permitted-Cross-Domain-Policies", "none")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+
     def _require_user(self) -> AuthUser:
         try:
             return auth_store().require_user(extract_bearer_token(self.headers))
@@ -3841,6 +3957,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self._security_headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -3858,7 +3975,20 @@ class StatementWebHandler(BaseHTTPRequestHandler):
             payload["requires_manual_rate"] = True
         self._send_json(payload, status=status)
 
-    def _serve_file(self, path: Path, content_type: str | None = None) -> None:
+    def _serve_file(self, path: Path, content_type: str | None = None, base: Path | None = None) -> None:
+        if base is not None:
+            # Reject any request that resolves outside the allowed base directory
+            # (e.g. "/static/../auth_store.py" or the SQLite auth database).
+            try:
+                resolved = path.resolve()
+                base_resolved = base.resolve()
+            except OSError:
+                self.send_error(HTTPStatus.NOT_FOUND, "File not found")
+                return
+            if resolved != base_resolved and base_resolved not in resolved.parents:
+                self.send_error(HTTPStatus.NOT_FOUND, "File not found")
+                return
+            path = resolved
         if not path.exists() or not path.is_file():
             self.send_error(HTTPStatus.NOT_FOUND, "File not found")
             return
@@ -3867,6 +3997,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", guessed)
         self.send_header("Content-Length", str(len(body)))
+        self._security_headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -3876,6 +4007,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Content-Length", str(len(body)))
+        self._security_headers()
         self.end_headers()
         self.wfile.write(body)
 
