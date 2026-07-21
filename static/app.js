@@ -47,6 +47,8 @@ const state = {
   formatWorkspaceVirtualItem: null,
   formatInlineRange: null,
   formatUndoStack: [],
+  formatWorkspaceOrientation: "portrait",
+  formatWorkspaceZoom: 100,
   autoSaveTimer: null,
   suppressAutoProfileSave: false,
 };
@@ -138,6 +140,12 @@ const formatBorderStyle = document.getElementById("format-border-style");
 const formatNumberFormat = document.getElementById("format-number-format");
 const formatMergeCenterButton = document.getElementById("format-merge-center-btn");
 const formatUnmergeButton = document.getElementById("format-unmerge-btn");
+const formatFitWidthButton = document.getElementById("format-fit-width-btn");
+const formatFullscreenButton = document.getElementById("format-fullscreen-btn");
+const formatZoomRange = document.getElementById("format-zoom-range");
+const formatZoomOutput = document.getElementById("format-zoom-output");
+const formatWorkbookStatus = document.getElementById("format-workbook-status");
+const formatZoomStatus = document.getElementById("format-zoom-status");
 const loginPasswordInput = document.getElementById("login-password");
 const loginPasswordToggle = document.getElementById("login-password-toggle");
 const passwordModalOverlay = document.getElementById("password-modal-overlay");
@@ -1598,6 +1606,75 @@ function ensureFormatObjectOptions() {
   }
 }
 
+function updateFormatWorkspaceStatus() {
+  if (formatWorkbookStatus) {
+    const detail = state.templateEditorDetail;
+    const selectionCount = state.formatWorkspaceSelectedKeys.length;
+    const selection = selectionCount > 1
+      ? `${selectionCount} cells selected`
+      : (state.formatWorkspaceSelectedKey || "Ready");
+    const access = detail?.editable ? "Editable" : "View only";
+    formatWorkbookStatus.textContent = `${access} | ${selection}`;
+  }
+  if (formatZoomStatus) {
+    formatZoomStatus.textContent = `${state.formatWorkspaceZoom}%`;
+  }
+}
+
+function applyFormatWorkspaceView() {
+  const orientation = state.formatWorkspaceOrientation === "landscape" ? "landscape" : "portrait";
+  const zoom = Math.max(50, Math.min(160, Number(state.formatWorkspaceZoom || 100)));
+  state.formatWorkspaceOrientation = orientation;
+  state.formatWorkspaceZoom = zoom;
+  formatSheetHost?.classList.toggle("is-landscape", orientation === "landscape");
+  formatSheetHost?.classList.toggle("is-portrait", orientation === "portrait");
+  const canvas = formatSheetHost?.firstElementChild;
+  if (canvas) {
+    canvas.style.zoom = String(zoom / 100);
+  }
+  document.querySelectorAll("[data-format-orientation]").forEach((button) => {
+    const active = button.dataset.formatOrientation === orientation;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  if (formatZoomRange) {
+    formatZoomRange.value = String(zoom);
+  }
+  if (formatZoomOutput) {
+    formatZoomOutput.textContent = `${zoom}%`;
+  }
+  updateFormatWorkspaceStatus();
+}
+
+function setFormatWorkspaceZoom(value) {
+  state.formatWorkspaceZoom = Math.max(50, Math.min(160, Math.round(Number(value || 100) / 10) * 10));
+  applyFormatWorkspaceView();
+}
+
+function fitFormatWorkspaceWidth() {
+  const canvas = formatSheetHost?.firstElementChild;
+  if (!canvas || !formatSheetHost) {
+    return;
+  }
+  const currentScale = Math.max(0.5, state.formatWorkspaceZoom / 100);
+  const contentWidth = Math.max(1, canvas.getBoundingClientRect().width / currentScale);
+  const availableWidth = Math.max(1, formatSheetHost.clientWidth - 24);
+  setFormatWorkspaceZoom((availableWidth / contentWidth) * 100);
+}
+
+function toggleFormatWorkspaceExpanded(force = null) {
+  if (!formatWorkspacePanel) {
+    return;
+  }
+  const expanded = force === null ? !formatWorkspacePanel.classList.contains("is-expanded") : Boolean(force);
+  formatWorkspacePanel.classList.toggle("is-expanded", expanded);
+  document.body.classList.toggle("format-workspace-expanded", expanded);
+  if (formatFullscreenButton) {
+    formatFullscreenButton.textContent = expanded ? "Exit Full Screen" : "Full Screen";
+  }
+  requestAnimationFrame(() => applyFormatWorkspaceView());
+}
+
 function compactFormatRibbon() {
   const ribbon = document.getElementById("format-ribbon");
   if (!ribbon || ribbon.dataset.compacted === "true") {
@@ -2498,6 +2575,7 @@ function selectFormatWorkspaceItem(key, node = null, options = {}) {
   if (formatSaveOriginalButton) {
     formatSaveOriginalButton.disabled = !key || !state.templateEditorDetail?.editable;
   }
+  updateFormatWorkspaceStatus();
 }
 
 function syncWorkspaceText(value) {
@@ -2613,6 +2691,7 @@ function toggleFormatWorkspaceSelection(key, node = null) {
   if (formatSelectedCell) {
     formatSelectedCell.textContent = `Selected: ${item?.label || item?.address || key} (${state.formatWorkspaceSelectedKeys.length} cells selected)`;
   }
+  updateFormatWorkspaceStatus();
 }
 
 function buildMergeRequestFromSelectedKeys() {
@@ -2918,6 +2997,7 @@ function renderVisualFormatWorkspace(detail, selectedKey = "") {
   if (nextKey) {
     selectFormatWorkspaceItem(nextKey);
   }
+  applyFormatWorkspaceView();
 }
 
 async function saveSelectedWorkspaceItem() {
@@ -3632,9 +3712,14 @@ function findStatementPreviewTable(root) {
   return null;
 }
 
-function previewSummaryLikeRow(row) {
+function previewSummaryLikeRow(row, columnMap = {}) {
   const text = String(row?.textContent || "").toLowerCase().replace(/\s+/g, " ").trim();
-  return /\b(total|summary|closing|balance in word|balance in words|words)\b/.test(text) && !/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(text);
+  const dateCell = row?.cells?.[columnMap.date ?? columnMap.txn_date ?? columnMap.value_date];
+  const dateText = String(dateCell?.textContent || "").trim();
+  if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(dateText)) {
+    return false;
+  }
+  return /\b(total|summary|closing balance|balance in word|balance in words|transaction summary|notice)\b/.test(text);
 }
 
 function setPreviewCellText(cell, value) {
@@ -3667,7 +3752,7 @@ function fillStatementRowsInPreview(root) {
   const { table, headerRowIndex, columnMap } = match;
   const startIndex = headerRowIndex + 1;
   let endIndex = startIndex;
-  while (endIndex < table.rows.length && !previewSummaryLikeRow(table.rows[endIndex])) {
+  while (endIndex < table.rows.length && !previewSummaryLikeRow(table.rows[endIndex], columnMap)) {
     endIndex += 1;
   }
   const parent = table.tBodies[0] || table.rows[startIndex]?.parentNode || table;
@@ -3676,6 +3761,7 @@ function fillStatementRowsInPreview(root) {
   const capacity = Math.max(0, endIndex - startIndex);
   for (let index = capacity; index < rowsData.length; index++) {
     const clone = templateRow.cloneNode(true);
+    clone.dataset.generatedTransactionRow = "true";
     clearPreviewDataRow(clone);
     parent.insertBefore(clone, insertBefore);
   }
@@ -3706,7 +3792,7 @@ function fillStatementRowsInPreview(root) {
   });
   for (let rowIndex = startIndex + rowsData.length; rowIndex < table.rows.length; rowIndex++) {
     const row = table.rows[rowIndex];
-    if (previewSummaryLikeRow(row)) {
+    if (previewSummaryLikeRow(row, columnMap)) {
       break;
     }
     clearPreviewDataRow(row);
@@ -4534,10 +4620,21 @@ function bindEvents() {
   });
 
   formatWorkspaceCloseButton?.addEventListener("click", () => {
+    toggleFormatWorkspaceExpanded(false);
     formatWorkspacePanel.hidden = true;
   });
 
   compactFormatRibbon();
+
+  document.querySelectorAll("[data-format-orientation]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.formatWorkspaceOrientation = button.dataset.formatOrientation === "landscape" ? "landscape" : "portrait";
+      applyFormatWorkspaceView();
+    });
+  });
+  formatZoomRange?.addEventListener("input", () => setFormatWorkspaceZoom(formatZoomRange.value));
+  formatFitWidthButton?.addEventListener("click", fitFormatWorkspaceWidth);
+  formatFullscreenButton?.addEventListener("click", () => toggleFormatWorkspaceExpanded());
 
   formatFormulaInput?.addEventListener("beforeinput", () => {
     pushFormatUndoSnapshot("Formula edit");

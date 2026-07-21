@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Web Statement Generator</title>
-  <link rel="stylesheet" href="./static/styles.css?v=20260527-homepage">
+  <link rel="stylesheet" href="./static/styles.css?v=20260721-editor">
 </head>
 <body class="auth-locked">
   <div class="page-shell">
@@ -27,7 +27,6 @@
         <button type="button" class="ghost-button" id="delete-profile-format-btn">Delete Profile Format</button>
         <button type="button" class="ghost-button" id="load-profile-format-btn">Load Profile Format</button>
         <button type="button" class="ghost-button" id="selftest-btn">Run Self Tests</button>
-        <button type="button" class="primary-button" id="create-stat-btn">Create Stat</button>
       </div>
       <div class="profile-format-editor inset-panel" id="profile-format-editor" hidden>
         <label class="field profile-format-field">
@@ -588,6 +587,19 @@
             </div>
             <button type="button" class="ghost-button compact-button" id="format-workspace-close-btn">Close Editor</button>
           </div>
+          <div class="format-view-bar">
+            <div class="format-view-modes" role="group" aria-label="Page orientation">
+              <button type="button" class="view-mode-button is-active" data-format-orientation="portrait">Portrait</button>
+              <button type="button" class="view-mode-button" data-format-orientation="landscape">Landscape</button>
+            </div>
+            <button type="button" class="ghost-button compact-button" id="format-fit-width-btn">Fit Width</button>
+            <button type="button" class="ghost-button compact-button" id="format-fullscreen-btn">Full Screen</button>
+            <label class="format-zoom-control" for="format-zoom-range">
+              <span>Zoom</span>
+              <input type="range" id="format-zoom-range" min="50" max="160" step="10" value="100">
+              <output id="format-zoom-output" for="format-zoom-range">100%</output>
+            </label>
+          </div>
           <div class="format-toolbar">
             <label class="field">
               <span>Insert Object</span>
@@ -704,6 +716,10 @@
           <div class="format-selected-note" id="format-selected-cell">No cell selected.</div>
           <div class="format-save-status" id="format-save-status" aria-live="polite"></div>
           <div class="format-sheet-shell" id="format-sheet-host"></div>
+          <div class="format-status-bar">
+            <span id="format-workbook-status">Ready</span>
+            <span id="format-zoom-status">100%</span>
+          </div>
           <p class="admin-subnote">Tip: formulas beginning with <code>=</code> are saved in Excel cells. Object tokens like <code>{{customer_name}}</code> are easy placeholders for exported formats.</p>
         </section>
 
@@ -737,6 +753,7 @@
               <button type="button" class="ghost-button" id="edit-statement-btn">Edit Statement</button>
               <button type="button" class="primary-button" id="update-statement-btn" disabled>Update & Recalculate</button>
               <button type="button" class="ghost-button" id="cancel-edit-btn" disabled>Cancel Edit</button>
+              <button type="button" class="primary-button" id="create-stat-btn">Create Stat</button>
             </div>
           </div>
           <div class="info-strip preview-edit-note" id="preview-edit-note" hidden>
@@ -850,6 +867,6 @@
     </div>
   </div>
 
-  <script type="module" src="./static/app.js?v=20260527-homepage"></script>
+  <script type="module" src="./static/app.js?v=20260721-editor"></script>
 </body>
 </html>

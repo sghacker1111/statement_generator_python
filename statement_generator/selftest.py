@@ -73,6 +73,9 @@ class GeneratorTests(unittest.TestCase):
             "round_500": 500,
             "round_1000_500": 500,
             "round_1000_500_100": 100,
+            "round_1000_500_100_50": 50,
+            "round_1000_500_100_50_10": 10,
+            "round_1000_500_100_50_10_5": 5,
         }
         for mode, modulo in modes.items():
             with self.subTest(mode=mode):

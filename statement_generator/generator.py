@@ -413,28 +413,31 @@ def _estimate_net_interest(
     return round_money(gross * 0.94)
 
 
+AMOUNT_STEPS_BY_MODE = {
+    "round_5": (5,),
+    "round_10": (10,),
+    "round_50": (50,),
+    "round_100": (100,),
+    "round_500": (500,),
+    "round_1000": (1_000,),
+    "round_1000_500": (1_000, 500),
+    "round_1000_500_100": (1_000, 500, 100),
+    "round_1000_500_100_50": (1_000, 500, 100, 50),
+    "round_1000_500_100_50_10": (1_000, 500, 100, 50, 10),
+    "round_1000_500_100_50_10_5": (1_000, 500, 100, 50, 10, 5),
+}
+
+
 def _normalize_amount_mode(value: str) -> str:
     normalized = str(value or "").strip().lower()
-    if normalized in {"round_5", "round_10", "round_50", "round_100", "round_500", "round_1000", "round_1000_500", "round_1000_500_100"}:
+    if normalized in AMOUNT_STEPS_BY_MODE:
         return normalized
     return "automatic"
 
 
 def _amount_step_for_mode(mode: str) -> int:
     normalized = _normalize_amount_mode(mode)
-    if normalized == "round_5":
-        return 5
-    if normalized == "round_10":
-        return 10
-    if normalized == "round_50":
-        return 50
-    if normalized == "round_100":
-        return 100
-    if normalized == "round_1000":
-        return 1_000
-    if normalized in {"round_500", "round_1000_500"}:
-        return 500
-    return 100
+    return min(AMOUNT_STEPS_BY_MODE.get(normalized, (1_000, 500, 100)))
 
 
 def _amount_range(config: StatementConfig, event_type: EventType) -> tuple[int, int]:
@@ -482,7 +485,7 @@ def _bounded_total_target(target: int, count: int, minimum: int, maximum: int, m
 def _random_step(rng: random.Random, mode: str = "automatic") -> int:
     normalized = _normalize_amount_mode(mode)
     if normalized != "automatic":
-        return _amount_step_for_mode(normalized)
+        return rng.choice(AMOUNT_STEPS_BY_MODE[normalized])
     roll = rng.random()
     if roll < 0.08:
         return 100

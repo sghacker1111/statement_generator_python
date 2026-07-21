@@ -400,7 +400,7 @@ function Test-SummaryStatementRow($Worksheet, $Row, $HeaderInfo) {
         $endCol = [Math]::Max($endCol, [int]$map["cheque"])
     }
     $rowText = (Get-WorksheetRowText $Worksheet $Row $startCol ([Math]::Min($endCol + 4, $endCol + 8))).ToLowerInvariant()
-    if ([string]::IsNullOrWhiteSpace($rowText) -or -not $rowText.Contains("total")) {
+    if ([string]::IsNullOrWhiteSpace($rowText) -or -not ($rowText -match "\b(total|summary|closing balance|balance in words?|transaction summary|notice)\b")) {
         return $false
     }
     $dateText = (Get-CellText $Worksheet.Cells.Item($Row, $map["date"])).Trim()
@@ -547,8 +547,13 @@ function Expand-StatementRows($Worksheet, $DataRange, $RequiredCount) {
         $tableEnd = $tableRange.Row + $tableRange.Rows.Count - 1
         if ($DataRange.Start -ge $tableStart -and $DataRange.End -le $tableEnd) {
             for ($index = 0; $index -lt $needed; $index++) {
-                $table.ListRows.Add() | Out-Null
+                $sourceRange = $table.ListRows.Item($table.ListRows.Count).Range
+                $newRow = $table.ListRows.Add()
+                $sourceRange.Copy() | Out-Null
+                $newRow.Range.PasteSpecial(-4122) | Out-Null
+                $newRow.Range.RowHeight = $sourceRange.RowHeight
             }
+            $Worksheet.Application.CutCopyMode = $false
             return
         }
     }

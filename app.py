@@ -117,6 +117,9 @@ AMOUNT_ROUNDING_OPTIONS = {
     "Rounding Figure 1000": "round_1000",
     "Rounding Figure 1000 and 500": "round_1000_500",
     "Rounding Figure 1000, 500 and 100": "round_1000_500_100",
+    "Rounding Figure 1000, 500, 100 and 50": "round_1000_500_100_50",
+    "Rounding Figure 1000, 500, 100, 50 and 10": "round_1000_500_100_50_10",
+    "Rounding Figure 1000, 500, 100, 50, 10 and 5": "round_1000_500_100_50_10_5",
 }
 DEFAULT_DEPOSIT_NAMES = "Self\nKaruna\nKrishna\nManisha"
 DEFAULT_WITHDRAWAL_NAMES = "Self\nKabita Thapa\nKamala Pandey"
@@ -3051,7 +3054,7 @@ def build_excel_preview_html_bytes(path: Path, title: str = "Statement") -> byte
                 if address != start:
                     covered.add(address)
 
-    max_row = min(meaningful_max_row, 300)
+    max_row = min(meaningful_max_row, 2_000)
     max_col = min(meaningful_max_col, 80)
     colgroup = []
     for col_index in range(1, max_col + 1):
