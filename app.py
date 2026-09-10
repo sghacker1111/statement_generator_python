@@ -56,26 +56,23 @@ from statement_generator.generator import (  # noqa: E402
     posting_date_for_period,
     recalculate_edited_statement,
     validate_edited_statement,
+    validate_transaction_dates,
 )
+from statement_generator.holidays import MANUAL_HOLIDAY_SEED_VERSION, SUNDAY_HOLIDAY_START, is_recurring_holiday, manual_holiday_dates  # noqa: E402
 from statement_generator.importers import import_xlsx_statement  # noqa: E402
 from statement_generator.selftest import run_tests  # noqa: E402
-from statement_generator.utils import format_amount, json_default, parse_iso_date, resolve_business_day, round_money, safe_filename  # noqa: E402
+from statement_generator.utils import format_amount, json_default, next_business_day, parse_iso_date, resolve_business_day, round_money, safe_filename  # noqa: E402
 
 
 DEFAULT_TEMPLATE_DIR = Path(r"D:\Finance Doc\Format")
-LEGACY_WEB_GENERATOR_PATH = Path(r"D:\Finance Doc\2026\Rubi\nepali_bank_statement_generator.html")
-HAMROPATRO_PUBLIC_HOLIDAYS_URL = "https://www.hamropatro.com/nepali-public-holidays"
 HAMROPATRO_ENGLISH_CALENDAR_URL = "https://english.hamropatro.com/calendar/"
 STATE_FILE = APP_ROOT / "web_statement_generator_state.json"
 USER_STATE_ROOT = APP_ROOT / "user_state"
 AUTH_DB_FILE = APP_ROOT / "web_statement_generator.db"
-PERSISTENT_RULES_SCHEMA_VERSION = 5
-REQUIRED_HOLIDAY_DATES = {"2025-10-23"}
-SUNDAY_HOLIDAY_START = date(2026, 4, 5)
+PERSISTENT_RULES_SCHEMA_VERSION = 6
 QUARTER_MONTHS = (1, 4, 7, 10)
 AUTO_REFRESH_SUCCESS_INTERVAL = timedelta(hours=6)
 AUTO_REFRESH_FAILURE_BACKOFF = timedelta(minutes=30)
-AUTO_HAMROPATRO_HOLIDAY_TIMEOUT = 5
 AUTO_HAMROPATRO_CALENDAR_TIMEOUT = 4
 MANUAL_HAMROPATRO_TIMEOUT = 10
 PERSISTENT_META_KEYS = ("last_auto_refresh_attempt_at", "last_auto_refresh_success_at")
@@ -259,32 +256,6 @@ def bootstrap_defaults(current_user: AuthUser) -> dict[str, str]:
     return defaults
 
 
-def _load_legacy_holiday_dates() -> set[str]:
-    if not LEGACY_WEB_GENERATOR_PATH.exists():
-        return set(REQUIRED_HOLIDAY_DATES)
-    try:
-        content = LEGACY_WEB_GENERATOR_PATH.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return set(REQUIRED_HOLIDAY_DATES)
-
-    import re
-
-    match = re.search(r"const\s+HOLIDAYS_AND_SATURDAYS\s*=\s*\[(.*?)\];", content, flags=re.DOTALL)
-    if not match:
-        return set(REQUIRED_HOLIDAY_DATES)
-
-    holidays: set[str] = set()
-    for date_text in re.findall(r"\d{4}-\d{2}-\d{2}", match.group(1)):
-        try:
-            parsed = parse_iso_date(date_text)
-        except Exception:
-            continue
-        if parsed.weekday() != 5:
-            holidays.add(parsed.isoformat())
-    holidays.update(REQUIRED_HOLIDAY_DATES)
-    return holidays
-
-
 def _clean_date_strings(values: object, saturday_only: bool = False) -> set[str]:
     cleaned: set[str] = set()
     if not isinstance(values, list):
@@ -360,11 +331,11 @@ def _should_auto_refresh(rules: dict[str, object]) -> bool:
 
 
 def load_persistent_rules(user_id: int | None = None) -> dict[str, object]:
-    custom_holidays = set(_load_legacy_holiday_dates())
+    custom_holidays = set(manual_holiday_dates())
     excluded_saturdays: set[str] = set()
     quarter_date_overrides: dict[str, str] = {}
     synced_quarter_dates: dict[str, str] = {}
-    schema_version = PERSISTENT_RULES_SCHEMA_VERSION
+    schema_version = 0
     metadata = _persistent_meta_defaults()
 
     payload = _read_state_payload(user_id)
@@ -376,12 +347,14 @@ def load_persistent_rules(user_id: int | None = None) -> dict[str, object]:
         elif payload.get("holidays"):
             legacy_lines = [item.strip() for item in str(payload.get("holidays", "")).splitlines() if item.strip()]
             custom_holidays = _clean_date_strings(legacy_lines)
-        excluded_saturdays = _clean_date_strings(payload.get("excluded_saturdays", []), saturday_only=True)
         quarter_date_overrides = _clean_quarter_overrides(payload.get("quarter_date_overrides", {}))
         synced_quarter_dates = _clean_quarter_overrides(payload.get("synced_quarter_dates", {}))
 
-    custom_holidays.update(REQUIRED_HOLIDAY_DATES)
-    if schema_version < PERSISTENT_RULES_SCHEMA_VERSION:
+    # Seed once so manual deletions survive later loads. Retain saved holidays
+    # because older files cannot distinguish manual entries from previous syncs.
+    if payload.get("holiday_seed_version") != MANUAL_HOLIDAY_SEED_VERSION:
+        custom_holidays.update(manual_holiday_dates())
+    if schema_version < PERSISTENT_RULES_SCHEMA_VERSION or payload.get("holiday_seed_version") != MANUAL_HOLIDAY_SEED_VERSION or payload.get("excluded_saturdays"):
         save_persistent_rules(custom_holidays, excluded_saturdays, quarter_date_overrides, synced_quarter_dates, user_id=user_id)
     return {
         "schema_version": PERSISTENT_RULES_SCHEMA_VERSION,
@@ -408,8 +381,9 @@ def save_persistent_rules(
                 persistent_meta[key] = str(metadata.get(key, "") or "")
     payload = {
         "schema_version": PERSISTENT_RULES_SCHEMA_VERSION,
-        "custom_holidays": sorted(custom_holidays | REQUIRED_HOLIDAY_DATES),
-        "excluded_saturdays": sorted(excluded_saturdays),
+        "holiday_seed_version": MANUAL_HOLIDAY_SEED_VERSION,
+        "custom_holidays": sorted(custom_holidays),
+        "excluded_saturdays": [],
         "quarter_date_overrides": dict(sorted(_clean_quarter_overrides(quarter_date_overrides).items())),
         "synced_quarter_dates": dict(sorted(_clean_quarter_overrides(synced_quarter_dates or {}).items())),
         **persistent_meta,
@@ -439,7 +413,7 @@ def auto_saturday_strings(start_text: str, end_text: str, excluded_saturdays: se
     rows: list[str] = []
     while current <= end:
         iso = current.isoformat()
-        if current.weekday() == 5 and iso not in excluded_saturdays:
+        if current.weekday() == 5:
             rows.append(iso)
         current += timedelta(days=1)
     return rows
@@ -450,8 +424,6 @@ def auto_sunday_holiday_strings(start_text: str, end_text: str) -> list[str]:
     if period is None:
         return []
     start, end = period
-    if end < SUNDAY_HOLIDAY_START:
-        return []
     if start < SUNDAY_HOLIDAY_START:
         start = SUNDAY_HOLIDAY_START
     current = start
@@ -473,13 +445,14 @@ def blocked_rule_rows(
 ) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     sunday_dates = set(auto_sunday_holiday_strings(start_text, end_text))
+    saturday_dates = set(auto_saturday_strings(start_text, end_text, excluded_saturdays))
     for holiday in sorted(custom_holidays):
-        if holiday in sunday_dates:
+        if is_recurring_holiday(parse_iso_date(holiday)):
             continue
         rows.append({"id": f"holiday:{holiday}", "date": holiday, "type": "Holiday"})
     for holiday in sorted(sunday_dates):
         rows.append({"id": f"sunday:{holiday}", "date": holiday, "type": "Sunday"})
-    for saturday in auto_saturday_strings(start_text, end_text, excluded_saturdays):
+    for saturday in sorted(saturday_dates):
         rows.append({"id": f"saturday:{saturday}", "date": saturday, "type": "Saturday"})
 
     if view == "Holiday":
@@ -616,27 +589,19 @@ def build_posting_date_payload(start_text: str, end_text: str, user_id: int | No
 
 
 def _remove_rule(custom_holidays: set[str], excluded_saturdays: set[str], rule_type: str, date_text: str) -> None:
-    normalized_date = parse_iso_date(date_text).isoformat()
+    normalized_date = _validate_rule_date(date_text, rule_type)
     normalized_type = rule_type.strip().title()
-    if normalized_type == "Sunday":
-        raise ValueError("Automatic Sunday holidays are generated automatically and cannot be removed individually.")
-    if normalized_type == "Holiday":
-        if normalized_date in REQUIRED_HOLIDAY_DATES:
-            raise ValueError(f"{normalized_date} is a required holiday and cannot be removed.")
-        custom_holidays.discard(normalized_date)
-    else:
-        excluded_saturdays.add(normalized_date)
+    if is_recurring_holiday(parse_iso_date(normalized_date)) or normalized_type in {"Saturday", "Sunday"}:
+        raise ValueError(f"Automatic {normalized_type} holidays cannot be removed or modified.")
+    custom_holidays.discard(normalized_date)
 
 
 def _apply_rule(custom_holidays: set[str], excluded_saturdays: set[str], date_text: str, rule_type: str) -> None:
     normalized = _validate_rule_date(date_text, rule_type)
     normalized_type = rule_type.strip().title()
-    if normalized_type == "Sunday":
-        raise ValueError("Automatic Sunday holidays are generated automatically and do not need a manual rule.")
-    if normalized_type == "Holiday":
-        custom_holidays.add(normalized)
-    else:
-        excluded_saturdays.discard(normalized)
+    if normalized_type != "Holiday" or is_recurring_holiday(parse_iso_date(normalized)):
+        raise ValueError("Saturday and automatic Sunday holidays do not need a manual rule.")
+    custom_holidays.add(normalized)
 
 
 def apply_rule_action(action_payload: dict[str, object], current_user: AuthUser) -> dict[str, object]:
@@ -645,7 +610,7 @@ def apply_rule_action(action_payload: dict[str, object], current_user: AuthUser)
     excluded_saturdays = set(rules["excluded_saturdays"])
     password = str(action_payload.get("password", "")).strip()
     if not password or not auth_store().verify_user_password(current_user.id, password):
-        raise PermissionError("Enter your account password to change holidays or Saturdays.")
+        raise PermissionError("Enter your account password to change manual holidays.")
 
     action = str(action_payload.get("action", "")).strip()
     if action == "restore_saturdays":
@@ -680,7 +645,6 @@ def apply_rule_action(action_payload: dict[str, object], current_user: AuthUser)
     else:
         raise ValueError("Unknown holiday action.")
 
-    custom_holidays.update(REQUIRED_HOLIDAY_DATES)
     save_persistent_rules(custom_holidays, excluded_saturdays, dict(rules["quarter_date_overrides"]), dict(rules["synced_quarter_dates"]), user_id=current_user.id)
     return build_holiday_payload(
         str(action_payload.get("start_date", default_form_values()["start_date"])),
@@ -717,57 +681,6 @@ def apply_posting_date_action(action_payload: dict[str, object], current_user: A
         str(action_payload.get("end_date", default_form_values()["end_date"])),
         user_id=current_user.id,
     )
-
-
-def _download_hamropatro_holiday_page(timeout: int = MANUAL_HAMROPATRO_TIMEOUT) -> str:
-    request = urllib.request.Request(
-        HAMROPATRO_PUBLIC_HOLIDAYS_URL,
-        headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) StatementGenerator/2.0",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        },
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
-        return response.read().decode("utf-8", errors="ignore")
-
-
-def _extract_hamropatro_gregorian_holidays(html: str) -> list[str]:
-    dates: set[str] = set()
-    for year_text, month_text, day_text in re.findall(r"\b(20\d{2})\s+([A-Za-z]+)\s+(\d{1,2})\b", html):
-        try:
-            parsed = datetime.strptime(f"{year_text} {month_text} {int(day_text):02d}", "%Y %B %d").date()
-        except ValueError:
-            continue
-        dates.add(parsed.isoformat())
-    return sorted(dates)
-
-
-def sync_hamropatro_holidays(action_payload: dict[str, object], current_user: AuthUser) -> dict[str, object]:
-    password = str(action_payload.get("password", "")).strip()
-    if not password or not auth_store().verify_user_password(current_user.id, password):
-        raise PermissionError("Enter your account password to update holidays automatically.")
-
-    rules = load_persistent_rules(current_user.id)
-    custom_holidays = set(rules["custom_holidays"])
-    excluded_saturdays = set(rules["excluded_saturdays"])
-    quarter_date_overrides = dict(rules["quarter_date_overrides"])
-
-    html = _download_hamropatro_holiday_page(timeout=MANUAL_HAMROPATRO_TIMEOUT)
-    detected = set(_extract_hamropatro_gregorian_holidays(html))
-    merged = custom_holidays | detected | REQUIRED_HOLIDAY_DATES
-    save_persistent_rules(merged, excluded_saturdays, quarter_date_overrides, dict(rules["synced_quarter_dates"]), user_id=current_user.id)
-    payload = build_holiday_payload(
-        str(action_payload.get("start_date", default_form_values()["start_date"])),
-        str(action_payload.get("end_date", default_form_values()["end_date"])),
-        view=str(action_payload.get("view", "All")) or "All",
-        user_id=current_user.id,
-    )
-    payload["sync"] = {
-        "source": HAMROPATRO_PUBLIC_HOLIDAYS_URL,
-        "detected_count": len(detected),
-        "merged_count": len(merged),
-    }
-    return payload
 
 
 def _download_hamropatro_page(url: str, timeout: int = MANUAL_HAMROPATRO_TIMEOUT) -> str:
@@ -883,6 +796,7 @@ def sync_hamropatro_posting_dates(action_payload: dict[str, object], current_use
         future_years=4,
         timeout=MANUAL_HAMROPATRO_TIMEOUT,
     )
+    rules = load_persistent_rules(current_user.id)
     save_persistent_rules(
         set(rules["custom_holidays"]),
         set(rules["excluded_saturdays"]),
@@ -919,16 +833,6 @@ def refresh_from_internet(start_text: str, end_text: str, user_id: int | None = 
         "last_auto_refresh_success_at": str(rules.get("last_auto_refresh_success_at", "") or ""),
     }
     refreshed = False
-    try:
-        detected = set(
-            _extract_hamropatro_gregorian_holidays(
-                _download_hamropatro_page(HAMROPATRO_PUBLIC_HOLIDAYS_URL, timeout=AUTO_HAMROPATRO_HOLIDAY_TIMEOUT)
-            )
-        )
-        refreshed = refreshed or bool(detected)
-    except Exception:
-        detected = set()
-    merged_holidays = custom_holidays | detected | REQUIRED_HOLIDAY_DATES
     synced_quarter_dates = dict(rules["synced_quarter_dates"])
     try:
         detected_quarter_dates = _compute_hamropatro_quarter_dates(
@@ -944,8 +848,11 @@ def refresh_from_internet(start_text: str, end_text: str, user_id: int | None = 
         synced_quarter_dates = dict(rules["synced_quarter_dates"])
     if refreshed:
         metadata["last_auto_refresh_success_at"] = metadata["last_auto_refresh_attempt_at"]
+    latest_rules = load_persistent_rules(user_id)
+    custom_holidays = set(latest_rules["custom_holidays"])
+    quarter_date_overrides = dict(latest_rules["quarter_date_overrides"])
     save_persistent_rules(
-        merged_holidays,
+        custom_holidays,
         excluded_saturdays,
         quarter_date_overrides,
         synced_quarter_dates,
@@ -953,7 +860,7 @@ def refresh_from_internet(start_text: str, end_text: str, user_id: int | None = 
         user_id=user_id,
     )
     return {
-        "holiday_dates": sorted(merged_holidays),
+        "holiday_dates": sorted(custom_holidays),
         "synced_quarter_dates": synced_quarter_dates,
         "skipped": False,
     }
@@ -992,13 +899,12 @@ def restore_user_date_rules(action_payload: dict[str, object], current_user: Aut
     metadata = _persistent_meta_defaults()
 
     if part in {"all", "holidays"}:
-        custom_holidays = set(_load_legacy_holiday_dates())
+        custom_holidays = set(manual_holiday_dates())
     if part in {"all", "saturdays"}:
         excluded_saturdays = set()
     if part in {"all", "posting_dates"}:
         quarter_date_overrides = {}
         synced_quarter_dates = {}
-    custom_holidays.update(REQUIRED_HOLIDAY_DATES)
     save_persistent_rules(
         custom_holidays,
         excluded_saturdays,
@@ -2722,6 +2628,9 @@ def serialize_preview_rows(rows: list[dict[str, object]]) -> list[dict[str, obje
 
 
 def hydrate_result_payload(config: StatementConfig, result_payload: dict[str, object]):
+    errors = validate_transaction_dates(config, result_payload.get("rows", []))
+    if errors:
+        raise ValueError(str(errors[0]["message"]) + " Recalculate the statement before exporting.")
     opening_business_date = parse_iso_date(str(result_payload.get("opening_business_date") or resolve_business_day(config.start_date, config.holiday_dates).isoformat()))
     ending_business_date = parse_iso_date(str(result_payload.get("ending_business_date") or resolve_business_day(config.end_date, config.holiday_dates).isoformat()))
 
@@ -3544,15 +3453,13 @@ class StatementWebHandler(BaseHTTPRequestHandler):
                 payload = self._read_json_body()
                 current_user = self._require_statement_user()
                 result = apply_rule_action(payload, current_user)
-                auth_store().log_activity(current_user.id, current_user.username, "holiday_change", "Updated holiday or Saturday rules.")
+                auth_store().log_activity(current_user.id, current_user.username, "holiday_change", "Updated manual holidays.")
                 self._send_json(result)
                 return
             if route == "/api/holidays_sync":
-                payload = self._read_json_body()
-                current_user = self._require_statement_user()
-                result = sync_hamropatro_holidays(payload, current_user)
-                auth_store().log_activity(current_user.id, current_user.username, "holiday_sync", "Synced holidays from Hamro Patro.")
-                self._send_json(result)
+                self._require_statement_user()
+                self._read_json_body()
+                self._send_json({"error": "Automatic holiday updates are disabled. Add holidays manually."}, status=HTTPStatus.GONE)
                 return
             if route == "/api/posting_dates":
                 payload = self._read_json_body()
@@ -3688,7 +3595,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
                     if float(last_row.get("debit", 0) or 0) > 0 or float(last_row.get("credit", 0) or 0) > 0:
                         form_payload["closing_row_mode"] = "transaction_allowed"
                 config = build_config(form_payload, user_id=current_user.id)
-                errors = validate_edited_statement(config, edited_rows)
+                errors = validate_transaction_dates(config, edited_rows) if payload.get("dates_only") is True else validate_edited_statement(config, edited_rows)
                 self._send_json(
                     {
                         "ok": not errors,

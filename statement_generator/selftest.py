@@ -415,6 +415,13 @@ class GeneratorTests(unittest.TestCase):
 
     def test_build_config_coercion(self) -> None:
         import app
+        from unittest.mock import patch
+        rules = patch.object(app, "load_persistent_rules", return_value={
+            "custom_holidays": set(), "excluded_saturdays": set(),
+            "quarter_date_overrides": {}, "synced_quarter_dates": {},
+        })
+        rules.start()
+        self.addCleanup(rules.stop)
         # Test that empty optional / numeric fields are coerced safely and do not raise ValueError crashes.
         form_data = {
             "bank_name": "Test Bank",
@@ -453,7 +460,11 @@ class GeneratorTests(unittest.TestCase):
 
 
 def run_tests() -> unittest.result.TestResult:
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(GeneratorTests)
+    from .test_holidays import HolidayTests
+    suite = unittest.TestSuite([
+        unittest.defaultTestLoader.loadTestsFromTestCase(GeneratorTests),
+        unittest.defaultTestLoader.loadTestsFromTestCase(HolidayTests),
+    ])
     return unittest.TextTestRunner(verbosity=2).run(suite)
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime
 import shutil
 import subprocess
@@ -25,7 +25,7 @@ except ImportError:  # pragma: no cover - depends on local Python install
     WD_ALIGN_PARAGRAPH = Pt = None
 
 from .exchange_rate import ExchangeRateLookupError, ExchangeRateResult, fetch_usd_npr_rate
-from .generator import StatementConfig, StatementResult
+from .generator import StatementConfig, StatementResult, validate_transaction_dates
 from .utils import (
     amount_to_words_npr,
     amount_to_words_usd,
@@ -95,6 +95,10 @@ def build_payload(
     result: StatementResult,
     exchange_rate: ExchangeRateResult,
 ) -> dict:
+    errors = validate_transaction_dates(config, [asdict(row) for row in result.rows])
+    if errors:
+        raise ValueError(str(errors[0]["message"]) + " Recalculate the statement before exporting.")
+
     def num_text(value: float, decimals: int = 2) -> str:
         return f"{float(value):.{decimals}f}"
 

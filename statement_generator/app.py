@@ -22,13 +22,12 @@ from .exporters import (
 )
 from .generator import StatementConfig, generate_statement, names_from_text
 from .selftest import run_tests
+from .holidays import MANUAL_HOLIDAY_SEED_VERSION, SUNDAY_HOLIDAY_START, is_recurring_holiday, manual_holiday_dates
 from .utils import format_amount, parse_iso_date, safe_filename
 
 
 DEFAULT_TEMPLATE_DIR = Path(r"D:\Finance Doc\Format")
-LEGACY_WEB_GENERATOR_PATH = Path(r"D:\Finance Doc\2026\Rubi\nepali_bank_statement_generator.html")
-PERSISTENT_RULES_SCHEMA_VERSION = 2
-REQUIRED_HOLIDAY_DATES = {"2025-10-23"}
+PERSISTENT_RULES_SCHEMA_VERSION = 3
 DESCRIPTION_MODE_OPTIONS = {
     "Label + Name": "label_plus_name",
     "Label Only": "label_only",
@@ -45,8 +44,8 @@ class StatementGeneratorApp(tk.Tk):
 
         self.generated_result = None
         self.catalog = TemplateCatalog([], [])
-        self.legacy_holiday_dates = self._load_legacy_holiday_dates()
-        self.custom_holiday_dates: set[str] = set(self.legacy_holiday_dates)
+        self.default_holiday_dates = set(manual_holiday_dates())
+        self.custom_holiday_dates: set[str] = set(self.default_holiday_dates)
         self.excluded_saturday_dates: set[str] = set()
         self.holiday_manager_window: tk.Toplevel | None = None
         self.holiday_tree: ttk.Treeview | None = None
@@ -141,7 +140,7 @@ class StatementGeneratorApp(tk.Tk):
         actions = ttk.Frame(outer)
         actions.pack(fill="x", pady=(10, 12))
         ttk.Button(actions, text="Generate Statement", command=self.generate_statement).pack(side="left")
-        ttk.Button(actions, text="Holidays & Saturdays", command=self.open_holiday_manager).pack(side="left", padx=(8, 0))
+        ttk.Button(actions, text="Holidays & Weekends", command=self.open_holiday_manager).pack(side="left", padx=(8, 0))
         ttk.Button(actions, text="Save Profile", command=self.save_profile).pack(side="left", padx=(8, 0))
         ttk.Button(actions, text="Load Profile", command=self.load_profile).pack(side="left", padx=(8, 0))
         ttk.Button(actions, text="Run Self Tests", command=self.run_self_tests).pack(side="left", padx=(8, 0))
@@ -216,7 +215,7 @@ class StatementGeneratorApp(tk.Tk):
             "- transaction dates are spread across months with mixed day numbers\n"
             "- interest and tax posting dates are reserved for system rows only\n"
             "- issue date becomes the next valid business day after the last transaction\n"
-            "- blocked dates come from the Holiday & Saturday manager"
+            "- blocked dates come from the Holiday & Weekend manager"
         )
         ttk.Label(parent, text=note, justify="left", foreground="#374151").grid(
             row=len(labels),
@@ -259,17 +258,17 @@ class StatementGeneratorApp(tk.Tk):
         self.withdrawal_names_text.grid(row=7, column=1, sticky="ew", pady=4)
         self.withdrawal_names_text.insert("1.0", "Self\nKabita Thapa\nKamala Pandey")
 
-        ttk.Label(parent, text="Blocked Holidays & Saturdays").grid(row=8, column=0, sticky="nw", padx=(0, 8), pady=4)
+        ttk.Label(parent, text="Blocked Holidays & Weekends").grid(row=8, column=0, sticky="nw", padx=(0, 8), pady=4)
         holiday_wrap = ttk.Frame(parent)
         holiday_wrap.grid(row=8, column=1, sticky="ew", pady=4)
         holiday_wrap.columnconfigure(0, weight=1)
         self.holiday_text = tk.Text(holiday_wrap, height=8, width=28, wrap="word")
         self.holiday_text.grid(row=0, column=0, sticky="ew")
-        self.holiday_text.insert("1.0", "Holiday manager will show old holiday dates and active Saturdays here.")
+        self.holiday_text.insert("1.0", "Manual holidays, all Saturdays, and Sundays from 2026-04-05 appear here.")
         self.holiday_text.configure(state="disabled")
         holiday_buttons = ttk.Frame(holiday_wrap)
         holiday_buttons.grid(row=1, column=0, sticky="ew", pady=(6, 0))
-        ttk.Button(holiday_buttons, text="Show Holidays & Saturdays", command=self.open_holiday_manager).pack(side="left")
+        ttk.Button(holiday_buttons, text="Show Holidays & Weekends", command=self.open_holiday_manager).pack(side="left")
         ttk.Button(holiday_buttons, text="Refresh List", command=self.refresh_holiday_display).pack(side="left", padx=(8, 0))
 
     def _build_export_tab(self, parent: ttk.Frame) -> None:
@@ -413,28 +412,6 @@ class StatementGeneratorApp(tk.Tk):
             return None
         return start, end
 
-    def _load_legacy_holiday_dates(self) -> set[str]:
-        if not LEGACY_WEB_GENERATOR_PATH.exists():
-            return set(REQUIRED_HOLIDAY_DATES)
-        try:
-            content = LEGACY_WEB_GENERATOR_PATH.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            return set(REQUIRED_HOLIDAY_DATES)
-        match = re.search(r"const\s+HOLIDAYS_AND_SATURDAYS\s*=\s*\[(.*?)\];", content, flags=re.DOTALL)
-        if not match:
-            return set(REQUIRED_HOLIDAY_DATES)
-
-        holidays: set[str] = set()
-        for date_text in re.findall(r"\d{4}-\d{2}-\d{2}", match.group(1)):
-            try:
-                parsed = parse_iso_date(date_text)
-            except Exception:
-                continue
-            if parsed.weekday() != 5:
-                holidays.add(parsed.isoformat())
-        holidays.update(REQUIRED_HOLIDAY_DATES)
-        return holidays
-
     def _state_file_path(self) -> Path:
         if getattr(sys, "frozen", False):
             base_dir = Path(sys.executable).resolve().parent
@@ -477,17 +454,19 @@ class StatementGeneratorApp(tk.Tk):
             legacy_lines = [item.strip() for item in str(payload.get("holidays", "")).splitlines() if item.strip()]
             self.custom_holiday_dates = self._clean_date_strings(legacy_lines)
 
-        self.excluded_saturday_dates = self._clean_date_strings(payload.get("excluded_saturdays", []), saturday_only=True)
+        self.excluded_saturday_dates = set()
 
-        if schema_version < PERSISTENT_RULES_SCHEMA_VERSION:
-            self.custom_holiday_dates.update(REQUIRED_HOLIDAY_DATES)
+        if payload.get("holiday_seed_version") != MANUAL_HOLIDAY_SEED_VERSION:
+            self.custom_holiday_dates.update(manual_holiday_dates())
+        if schema_version < PERSISTENT_RULES_SCHEMA_VERSION or payload.get("holiday_seed_version") != MANUAL_HOLIDAY_SEED_VERSION or payload.get("excluded_saturdays"):
             self._save_persistent_rules(show_error=False)
 
     def _save_persistent_rules(self, show_error: bool = True) -> bool:
         payload = {
             "schema_version": PERSISTENT_RULES_SCHEMA_VERSION,
+            "holiday_seed_version": MANUAL_HOLIDAY_SEED_VERSION,
             "custom_holidays": sorted(self.custom_holiday_dates),
-            "excluded_saturdays": sorted(self.excluded_saturday_dates),
+            "excluded_saturdays": [],
         }
         path = self._state_file_path()
         try:
@@ -517,26 +496,44 @@ class StatementGeneratorApp(tk.Tk):
         dates: list[str] = []
         current = start
         while current <= end:
-            if current.weekday() == 5 and current.isoformat() not in self.excluded_saturday_dates:
+            if current.weekday() == 5:
+                dates.append(current.isoformat())
+            current += timedelta(days=1)
+        return dates
+
+    def _auto_sunday_strings(self) -> list[str]:
+        period = self._get_statement_period()
+        if period is None:
+            return []
+        start, end = period
+        current = max(start, SUNDAY_HOLIDAY_START)
+        dates: list[str] = []
+        while current <= end + timedelta(days=31):
+            if current.weekday() == 6:
                 dates.append(current.isoformat())
             current += timedelta(days=1)
         return dates
 
     def _blocked_rule_rows(self, view: str | None = None) -> list[tuple[str, str, str]]:
         rows: list[tuple[str, str, str]] = []
+        saturdays = set(self._auto_saturday_strings())
+        sundays = set(self._auto_sunday_strings())
         for holiday in sorted(self.custom_holiday_dates):
+            if is_recurring_holiday(parse_iso_date(holiday)):
+                continue
             rows.append((f"holiday:{holiday}", holiday, "Holiday"))
-        for saturday in self._auto_saturday_strings():
+        for saturday in sorted(saturdays):
             rows.append((f"saturday:{saturday}", saturday, "Saturday"))
-        if view == "Holiday":
-            rows = [row for row in rows if row[2] == "Holiday"]
-        elif view == "Saturday":
-            rows = [row for row in rows if row[2] == "Saturday"]
+        for sunday in sorted(sundays):
+            rows.append((f"sunday:{sunday}", sunday, "Sunday"))
+        if view in {"Holiday", "Saturday", "Sunday"}:
+            rows = [row for row in rows if row[2] == view]
         return rows
 
     def _blocked_dates(self) -> set[date]:
         blocked = {parse_iso_date(item) for item in self.custom_holiday_dates}
         blocked.update(parse_iso_date(item) for item in self._auto_saturday_strings())
+        blocked.update(parse_iso_date(item) for item in self._auto_sunday_strings())
         return blocked
 
     def refresh_holiday_display(self) -> None:
@@ -549,7 +546,8 @@ class StatementGeneratorApp(tk.Tk):
             header += f"Period: {period[0].isoformat()} to {period[1].isoformat()}\n"
         header += (
             f"Holidays: {len(self.custom_holiday_dates)} | "
-            f"Active Saturdays: {len(self._auto_saturday_strings())} | "
+            f"Saturdays: {len(self._auto_saturday_strings())} | "
+            f"Sundays: {len(self._auto_sunday_strings())} | "
             f"Total Blocked: {len(rows)}\n\n"
         )
         if rows:
@@ -566,8 +564,8 @@ class StatementGeneratorApp(tk.Tk):
 
     def _set_holiday_view(self, view: str, sync_type: bool = True) -> None:
         self.holiday_view_var.set(view)
-        if sync_type and view in {"Holiday", "Saturday"}:
-            self.holiday_edit_type_var.set(view)
+        if sync_type:
+            self.holiday_edit_type_var.set("Holiday")
         self._refresh_holiday_tree()
 
     def open_holiday_manager(self) -> None:
@@ -578,7 +576,7 @@ class StatementGeneratorApp(tk.Tk):
             return
 
         window = tk.Toplevel(self)
-        window.title("Holiday & Saturday Manager")
+        window.title("Holiday & Weekend Manager")
         window.geometry("760x560")
         window.minsize(700, 500)
         self.holiday_manager_window = window
@@ -587,8 +585,8 @@ class StatementGeneratorApp(tk.Tk):
         note = ttk.Label(
             window,
             text=(
-                "Holidays are loaded from your old HTML list, and Saturdays are generated automatically from the current "
-                "statement period. Use the view buttons below to see All, only Holidays, or only Saturdays."
+                "Add, modify, or delete manual holidays here. Saturdays are always blocked, and Sundays are blocked "
+                "from 2026-04-05. Automatic weekend holidays cannot be changed."
             ),
             justify="left",
             foreground="#374151",
@@ -598,7 +596,7 @@ class StatementGeneratorApp(tk.Tk):
         view_bar = ttk.Frame(window, padding=(12, 0, 12, 8))
         view_bar.pack(fill="x")
         ttk.Label(view_bar, text="View").pack(side="left")
-        for view_name in ("All", "Holiday", "Saturday"):
+        for view_name in ("All", "Holiday", "Saturday", "Sunday"):
             ttk.Radiobutton(
                 view_bar,
                 text=view_name,
@@ -633,7 +631,7 @@ class StatementGeneratorApp(tk.Tk):
         ttk.Combobox(
             editor,
             textvariable=self.holiday_edit_type_var,
-            values=["Holiday", "Saturday"],
+            values=["Holiday"],
             state="readonly",
             width=14,
         ).grid(row=0, column=3, sticky="w", pady=4)
@@ -643,7 +641,6 @@ class StatementGeneratorApp(tk.Tk):
         ttk.Button(button_row, text="Add", command=self.add_holiday_rule).pack(side="left")
         ttk.Button(button_row, text="Modify Selected", command=self.update_selected_holiday_rule).pack(side="left", padx=(8, 0))
         ttk.Button(button_row, text="Delete Selected", command=self.delete_selected_holiday_rule).pack(side="left", padx=(8, 0))
-        ttk.Button(button_row, text="Restore All Saturdays", command=self.restore_all_saturdays).pack(side="left", padx=(8, 0))
         ttk.Button(button_row, text="Close", command=self._close_holiday_manager).pack(side="left", padx=(8, 0))
 
         self._refresh_holiday_tree()
@@ -659,7 +656,7 @@ class StatementGeneratorApp(tk.Tk):
         holidays = len(self._blocked_rule_rows("Holiday"))
         saturdays = len(self._blocked_rule_rows("Saturday"))
         self.holiday_status_var.set(
-            f"Holidays: {holidays} | Saturdays: {saturdays} | Showing: {len(rows)}"
+            f"Holidays: {holidays} | Saturdays: {saturdays} | Sundays: {len(self._blocked_rule_rows('Sunday'))} | Showing: {len(rows)}"
         )
 
     def _load_selected_holiday_rule(self) -> None:
@@ -671,27 +668,23 @@ class StatementGeneratorApp(tk.Tk):
         item = self.holiday_tree.item(selection[0], "values")
         if len(item) >= 2:
             self.holiday_edit_date_var.set(item[0])
-            self.holiday_edit_type_var.set(item[1])
+            self.holiday_edit_type_var.set("Holiday")
 
     def _validate_rule_date(self, date_text: str, rule_type: str) -> str:
         parsed = parse_iso_date(date_text)
-        if rule_type == "Saturday" and parsed.weekday() != 5:
-            raise ValueError("Selected Saturday date must actually be a Saturday.")
+        if rule_type != "Holiday" or is_recurring_holiday(parsed):
+            raise ValueError("Automatic Saturday and Sunday holidays cannot be changed. Select Holiday to add a manual date.")
         return parsed.isoformat()
 
     def _remove_rule(self, rule_id: str) -> None:
         rule_type, date_text = rule_id.split(":", 1)
-        if rule_type == "holiday":
-            self.custom_holiday_dates.discard(date_text)
-        elif rule_type == "saturday":
-            self.excluded_saturday_dates.add(date_text)
+        if rule_type != "holiday" or is_recurring_holiday(parse_iso_date(date_text)):
+            raise ValueError("Automatic Saturday and Sunday holidays cannot be removed or modified.")
+        self.custom_holiday_dates.discard(date_text)
 
     def _apply_rule(self, date_text: str, rule_type: str) -> None:
         normalized = self._validate_rule_date(date_text, rule_type)
-        if rule_type == "Holiday":
-            self.custom_holiday_dates.add(normalized)
-        else:
-            self.excluded_saturday_dates.discard(normalized)
+        self.custom_holiday_dates.add(normalized)
 
     def add_holiday_rule(self) -> None:
         try:
@@ -708,7 +701,7 @@ class StatementGeneratorApp(tk.Tk):
             return
         selection = self.holiday_tree.selection()
         if not selection:
-            messagebox.showwarning("Holiday Manager", "Select a holiday or Saturday to modify.", parent=self.holiday_manager_window or self)
+            messagebox.showwarning("Holiday Manager", "Select a manual holiday to modify.", parent=self.holiday_manager_window or self)
             return
         try:
             updated_type = self.holiday_edit_type_var.get().strip() or "Holiday"
@@ -727,10 +720,14 @@ class StatementGeneratorApp(tk.Tk):
             return
         selection = self.holiday_tree.selection()
         if not selection:
-            messagebox.showwarning("Holiday Manager", "Select a holiday or Saturday to delete.", parent=self.holiday_manager_window or self)
+            messagebox.showwarning("Holiday Manager", "Select a manual holiday to delete.", parent=self.holiday_manager_window or self)
             return
         item = self.holiday_tree.item(selection[0], "values")
-        self._remove_rule(selection[0])
+        try:
+            self._remove_rule(selection[0])
+        except ValueError as error:
+            messagebox.showerror("Holiday Manager", str(error), parent=self.holiday_manager_window or self)
+            return
         self._save_persistent_rules()
         self.refresh_holiday_display()
         if len(item) >= 2:
@@ -1010,8 +1007,9 @@ class StatementGeneratorApp(tk.Tk):
             "vars": {key: var.get() for key, var in self.vars.items() if key != "today"},
             "deposit_names": self.deposit_names_text.get("1.0", "end").strip(),
             "withdrawal_names": self.withdrawal_names_text.get("1.0", "end").strip(),
+            "holiday_seed_version": MANUAL_HOLIDAY_SEED_VERSION,
             "custom_holidays": sorted(self.custom_holiday_dates),
-            "excluded_saturdays": sorted(self.excluded_saturday_dates),
+            "excluded_saturdays": [],
         }
 
     def _apply_profile_payload(self, payload: dict) -> None:
@@ -1028,8 +1026,10 @@ class StatementGeneratorApp(tk.Tk):
             legacy_lines = [item.strip() for item in str(payload.get("holidays", "")).splitlines() if item.strip()]
             self.custom_holiday_dates = self._clean_date_strings(legacy_lines)
         else:
-            self.custom_holiday_dates = set(self.legacy_holiday_dates)
-        self.excluded_saturday_dates = self._clean_date_strings(payload.get("excluded_saturdays", []), saturday_only=True)
+            self.custom_holiday_dates = set(self.default_holiday_dates)
+        self.excluded_saturday_dates = set()
+        if payload.get("holiday_seed_version") != MANUAL_HOLIDAY_SEED_VERSION:
+            self.custom_holiday_dates.update(manual_holiday_dates())
         self.holiday_view_var.set("All")
         self._save_persistent_rules(show_error=False)
         self.refresh_holiday_display()

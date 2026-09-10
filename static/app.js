@@ -907,9 +907,17 @@ function syncEditableField(index, field, value) {
 }
 
 function renderHolidayPayload(payload) {
+  const rows = payload.rows || [];
+  if (state.selectedHoliday && !rows.some((row) =>
+    row.date === state.selectedHoliday.date && row.type === state.selectedHoliday.type)) {
+    state.selectedHoliday = null;
+  }
+  const editable = state.selectedHoliday?.type === "Holiday";
+  document.getElementById("holiday-update-btn").disabled = !editable;
+  document.getElementById("holiday-delete-btn").disabled = !editable;
   const periodLabel = payload.period.start_date && payload.period.end_date
     ? `Period: ${payload.period.start_date} to ${payload.period.end_date}`
-    : "Enter a valid statement period to show active Saturdays.";
+    : "Enter a valid statement period to show weekends.";
   holidaySummary.textContent =
     `${periodLabel} | Holidays: ${payload.counts.holidays} | Sundays: ${payload.counts.sundays ?? 0} | Active Saturdays: ${payload.counts.saturdays} | Showing: ${payload.counts.showing}`;
 
@@ -923,7 +931,7 @@ function renderHolidayPayload(payload) {
     tr.addEventListener("click", () => {
       state.selectedHoliday = { date: row.date, type: row.type };
       document.getElementById("holiday-date").value = row.date;
-      document.getElementById("holiday-type").value = row.type;
+      document.getElementById("holiday-type").value = "Holiday";
       renderHolidayPayload(payload);
     });
     holidayBody.append(tr);
@@ -1242,8 +1250,8 @@ async function autoRefreshInternetData() {
   }
   appendLog(
     payload.refresh?.skipped
-      ? "Recent internet data is already cached, so the latest saved holidays, Sundays, posting dates, and NRB rate snapshot stayed in use."
-      : "Latest holidays, Sundays, posting dates, and NRB rate snapshot were refreshed from the internet."
+      ? "Using cached posting dates and NRB exchange rate."
+      : "Posting dates and NRB exchange rate refresh completed."
   );
 }
 
@@ -1269,7 +1277,13 @@ async function handleHolidayAction(action) {
   const values = getFormValues();
   const holidayDate = document.getElementById("holiday-date").value;
   const holidayType = document.getElementById("holiday-type").value;
-  const password = await requestPassword("Holiday Update", "Enter your account password to change holidays, Sundays, or Saturdays.");
+  if ((action === "update" || action === "delete") && state.selectedHoliday?.type !== "Holiday") {
+    throw new Error("Select a manual holiday. Recurring Saturdays and Sundays cannot be changed.");
+  }
+  if (action !== "delete" && !holidayDate) {
+    throw new Error("Choose a holiday date first.");
+  }
+  const password = await requestPassword("Holiday Update", "Enter your account password to change manual holidays.");
   if (!password) {
     throw new Error("Holiday change was cancelled.");
   }
@@ -1285,7 +1299,7 @@ async function handleHolidayAction(action) {
 
   if (action === "update" || action === "delete") {
     if (!state.selectedHoliday) {
-      throw new Error("Select a holiday or Saturday first.");
+      throw new Error("Select a manual holiday first.");
     }
     payload.original_date = state.selectedHoliday.date;
     payload.original_type = state.selectedHoliday.type;
@@ -1299,33 +1313,16 @@ async function handleHolidayAction(action) {
     method: "POST",
     body: JSON.stringify(payload),
   });
+  if (action === "add" || action === "update") {
+    state.selectedHoliday = { date: holidayDate, type: "Holiday" };
+  }
   if (action === "delete") {
     state.selectedHoliday = null;
     document.getElementById("holiday-date").value = "";
     document.getElementById("holiday-type").value = "Holiday";
   }
+  closeInlinePrintPreview();
   renderHolidayPayload(result);
-}
-
-async function syncHolidayDatesFromHamroPatro() {
-  const values = getFormValues();
-  const password = await requestPassword("Holiday Auto Update", "Enter your account password to update holidays automatically from Hamro Patro.");
-  if (!password) {
-    throw new Error("Holiday auto update was cancelled.");
-  }
-  const result = await fetchJson(apiUrl("holidays_sync"), {
-    method: "POST",
-    body: JSON.stringify({
-      start_date: values.start_date,
-      end_date: values.end_date,
-      view: state.holidayView,
-      password,
-    }),
-  });
-  renderHolidayPayload(result);
-  appendLog(
-    `Holiday auto update completed from Hamro Patro. Added or refreshed ${result.sync?.downloaded_dates || 0} dated holiday entries.`
-  );
 }
 
 async function handlePostingDateAction(action) {
@@ -3845,7 +3842,29 @@ html, body { margin: 0; background: #eef3f6; color: #16324a; font-family: Calibr
 </html>`;
 }
 
+async function ensureWorkingTransactionDates() {
+  if (!state.currentStatement) {
+    throw new Error("Generate, import, or load a statement before previewing.");
+  }
+  const payload = await fetchJson(apiUrl("validate_statement"), {
+    method: "POST",
+    body: JSON.stringify({
+      config: getFormValues(),
+      edited_rows: currentPreviewRows(),
+      statement_id: state.currentStatementId,
+      source_type: state.currentStatementSource,
+      dates_only: true,
+    }),
+  });
+  const errors = payload.errors || [];
+  if (errors.length) {
+    renderValidationResults(errors);
+    throw new Error("Correct the blocked transaction dates before printing or previewing this statement.");
+  }
+}
+
 async function showGeneratedFormatPreview(autoPrint = false) {
+  await ensureWorkingTransactionDates();
   const detail = state.templateEditorDetail || await loadTemplateDetail(true);
   const html = buildGeneratedFormatPreviewHtml(detail);
   const kind = detail?.kind === "certificate" ? "certificate" : "statement";
@@ -5049,25 +5068,6 @@ function bindEvents() {
     try {
       await handleHolidayAction("delete");
       appendLog("Deleted the selected blocked date rule.");
-    } catch (error) {
-      appendLog(error.message, "error");
-      alert(error.message);
-    }
-  });
-
-  document.getElementById("holiday-restore-btn").addEventListener("click", async () => {
-    try {
-      await handleHolidayAction("restore_saturdays");
-      appendLog("Restored all Saturdays for the current statement period.");
-    } catch (error) {
-      appendLog(error.message, "error");
-      alert(error.message);
-    }
-  });
-
-  document.getElementById("holiday-sync-btn").addEventListener("click", async () => {
-    try {
-      await syncHolidayDatesFromHamroPatro();
     } catch (error) {
       appendLog(error.message, "error");
       alert(error.message);

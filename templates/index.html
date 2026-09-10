@@ -48,7 +48,7 @@
             <button type="button" class="tab-button is-active" data-target="account-panel">Account</button>
             <button type="button" class="tab-button" data-target="statement-panel">Statement Rules</button>
             <button type="button" class="tab-button" data-target="texts-panel">Texts & Names</button>
-            <button type="button" class="tab-button" data-target="holidays-panel">Holidays & Saturdays</button>
+            <button type="button" class="tab-button" data-target="holidays-panel">Holidays & Weekends</button>
             <button type="button" class="tab-button" data-target="export-panel">Export and Print</button>
             <button type="button" class="tab-button" data-target="admin-panel">Admin & History</button>
           </div>
@@ -180,8 +180,8 @@
 
           <section class="form-panel" id="holidays-panel">
             <div class="section-head">
-              <h2>Holidays & Saturdays</h2>
-              <p>Old holiday dates are loaded automatically. You can view, add, modify, delete, and restore blocked dates here.</p>
+              <h2>Holidays & Weekends</h2>
+              <p>The supplied holiday list is included. Add, modify, or delete other holidays manually. Saturdays are always holidays; Sundays are holidays from April 5, 2026 under the existing rule. Recurring weekends cannot be changed.</p>
             </div>
             <div class="holiday-summary" id="holiday-summary"></div>
             <div class="holiday-view-bar">
@@ -193,20 +193,12 @@
             <div class="holiday-editor panel inset-panel">
               <div class="field-grid editor-grid">
                 <label class="field"><span>Date</span><input type="date" id="holiday-date"></label>
-                <label class="field"><span>Type</span>
-                  <select id="holiday-type">
-                    <option value="Holiday">Holiday</option>
-                    <option value="Sunday">Sunday</option>
-                    <option value="Saturday">Saturday</option>
-                  </select>
-                </label>
+                <input type="hidden" id="holiday-type" value="Holiday">
               </div>
               <div class="editor-actions">
-                <button type="button" class="ghost-button" id="holiday-add-btn">Add</button>
-                <button type="button" class="ghost-button" id="holiday-update-btn">Modify Selected</button>
-                <button type="button" class="ghost-button" id="holiday-delete-btn">Delete Selected</button>
-                <button type="button" class="ghost-button" id="holiday-restore-btn">Restore All Saturdays</button>
-                <button type="button" class="ghost-button" id="holiday-sync-btn">Auto Update Holidays</button>
+                <button type="button" class="ghost-button" id="holiday-add-btn">Add Holiday</button>
+                <button type="button" class="ghost-button" id="holiday-update-btn" disabled>Modify Selected</button>
+                <button type="button" class="ghost-button" id="holiday-delete-btn" disabled>Delete Selected</button>
               </div>
             </div>
             <div class="table-shell short-table">
@@ -846,7 +838,7 @@
           </article>
           <article>
             <h3>Date Protection</h3>
-            <p>Keep transactions away from holidays, Saturdays, and protected interest or tax posting dates with editable calendar rules.</p>
+            <p>Keep transactions away from manual holidays, Saturdays, Sundays under the existing rule, and protected interest or tax posting dates.</p>
           </article>
         </div>
       </section>

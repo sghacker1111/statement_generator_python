@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *.pyo
 
+# Local distribution archives
+/*.zip
+
 # Local runtime state
 *.log
 ._*

@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 from typing import Any, Iterable
 
+from .holidays import is_recurring_holiday
+
 
 MONTH_NAMES = (
     "",
@@ -116,7 +118,7 @@ def daterange(start: date, end: date) -> Iterable[date]:
 
 
 def is_business_day(day_value: date, holidays: set[date]) -> bool:
-    return day_value not in holidays
+    return day_value not in holidays and not is_recurring_holiday(day_value)
 
 
 def next_business_day(day_value: date, holidays: set[date], include_self: bool = False) -> date:

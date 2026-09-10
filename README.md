@@ -95,7 +95,7 @@ Use this edition to review the Python implementation and native `.xlsx`/`.docx` 
 - Python 3.10 or later is recommended.
 - Install OpenPyXL and python-docx for native Excel and Word output: `python -m pip install openpyxl python-docx`.
 - Customized Office-template automation requires Windows, Microsoft Excel, Microsoft Word, and permission to start Office automation.
-- Internet access is optional for most features but is used for live exchange-rate and calendar synchronization. Manual values remain available.
+- Internet access is optional and is used for exchange-rate and interest/tax posting-date refresh. Holidays use the supplied local list and manual changes; holiday synchronization is disabled.
 - Do not use production credentials or real customer data during judging.
 
 ## Run locally
@@ -122,8 +122,9 @@ The browser editor can scan and update supported custom `.xlsx` and `.docx` form
 ## Verification
 
 ```powershell
-python -m unittest statement_generator.selftest
+python -m unittest statement_generator.selftest statement_generator.test_holidays
 node --check static/app.js
+node --test tests/holiday-ui.test.cjs
 ```
 
 The test suite covers transaction planning, amount rules, historical tax handling, multi-year statements, balance reconciliation, validation, and recalculation.
@@ -131,3 +132,7 @@ The test suite covers transaction planning, amount rules, historical tax handlin
 ## Website integration
 
 The optional files in `site_integration/` can add a button from another website to this application. See [site_integration/README.md](site_integration/README.md) for setup details.
+
+## Manual holidays
+
+The supplied 243 dates are included in `data/manual_holidays.json`. Saturdays are always blocked, and Sundays remain blocked from April 5, 2026 under the existing rule. Add other holidays in **Holidays & Weekends**. See [HOLIDAY_RULES.md](HOLIDAY_RULES.md) for editing, account migration, and deployment details.
