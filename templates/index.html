@@ -104,9 +104,29 @@
               <label class="field"><span>Maximum Deposit Amount</span><input name="deposit_max_amount" type="number" min="1" step="100"></label>
               <label class="field"><span>Minimum Withdraw Amount</span><input name="withdrawal_min_amount" type="number" min="1" step="100"></label>
               <label class="field"><span>Maximum Withdraw Amount</span><input name="withdrawal_max_amount" type="number" min="1" step="100"></label>
-              <label class="field"><span>Amount Rounding Type</span>
-                <select name="amount_rounding_mode" id="amount-rounding-mode"></select>
-              </label>
+              <div class="inset-panel field-span" id="rounding-rules-panel">
+                <div class="section-head compact-section-head"><h3>Transaction Counts &amp; Rounding</h3>
+                  <p>Credit transactions exceed debit transactions by a randomly selected 5 to 10. A fixed total limits the available odd/even differences. At least 7 transactions are required.</p>
+                </div>
+                <label class="field"><span>Amount Rounding Type</span>
+                  <select name="amount_rounding_mode" id="amount-rounding-mode"></select>
+                </label>
+                <p id="rounding-rule-summary">Automatic: 70% in multiples of 1,000 or 500; 20% in multiples of 100 or 50; 10% in multiples of 5.</p>
+                <input type="hidden" name="amount_rounding_percentages" id="amount-rounding-percentages" value="">
+                <div id="rounding-custom-panel" hidden>
+                  <p>Enter percentages for the combined number of debit and credit transactions. Figures are assigned randomly across both columns. Interest, tax, and balance rows are excluded.</p>
+                  <div class="field-grid two-col">
+                  <label class="field"><span>Multiples of 1,000 (%)</span><input type="number" data-rounding-step="1000" min="0" max="100" step="0.01" value="35" aria-label="Percentage of transactions rounded to 1000"></label>
+                  <label class="field"><span>Multiples of 500 (%)</span><input type="number" data-rounding-step="500" min="0" max="100" step="0.01" value="35" aria-label="Percentage of transactions rounded to 500"></label>
+                  <label class="field"><span>Multiples of 100 (%)</span><input type="number" data-rounding-step="100" min="0" max="100" step="0.01" value="10" aria-label="Percentage of transactions rounded to 100"></label>
+                  <label class="field"><span>Multiples of 50 (%)</span><input type="number" data-rounding-step="50" min="0" max="100" step="0.01" value="10" aria-label="Percentage of transactions rounded to 50"></label>
+                  <label class="field"><span>Multiples of 10 (%)</span><input type="number" data-rounding-step="10" min="0" max="100" step="0.01" value="0" aria-label="Percentage of transactions rounded to 10"></label>
+                  <label class="field"><span>Multiples of 5 (%)</span><input type="number" data-rounding-step="5" min="0" max="100" step="0.01" value="10" aria-label="Percentage of transactions rounded to 5"></label>
+                  </div>
+                  <p id="rounding-percentage-total" role="status" aria-live="polite">Total: 100%</p>
+                  <p>Each amount is counted in its largest matching rounding figure, so categories do not overlap. Percentages are converted to the nearest whole transaction counts.</p>
+                </div>
+              </div>
               <label class="field"><span>Interest Rate (%)</span><input name="interest_rate" type="number" step="0.0001"></label>
               <label class="field"><span>Tax Rate (%)</span><input name="tax_rate" type="number" step="0.0001"></label>
               <label class="field"><span>Cheque Start No.</span><input name="cheque_start" type="number" step="1"></label>
@@ -859,6 +879,6 @@
     </div>
   </div>
 
-  <script type="module" src="./static/app.js?v=20260721-editor"></script>
+  <script type="module" src="./static/app.js?v=20260915-rounding"></script>
 </body>
 </html>

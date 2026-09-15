@@ -247,7 +247,61 @@ function normalizeYesNo(value, fallback = true) {
   return !["no", "false", "0", "off"].includes(normalized);
 }
 
+const roundingDefaults = { 1000: 35, 500: 35, 100: 10, 50: 10, 10: 0, 5: 10 };
+
+function loadRoundingPercentages(raw) {
+  let values = roundingDefaults;
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) values = parsed;
+  } catch (_) { /* Old profiles use the default percentages. */ }
+  for (const input of document.querySelectorAll("[data-rounding-step]")) {
+    input.value = values[input.dataset.roundingStep] ?? 0;
+  }
+  updateRoundingState();
+}
+
+function updateRoundingPercentagesValue() {
+  const values = {};
+  let total = 0;
+  let valid = true;
+  const custom = document.getElementById("amount-rounding-mode")?.value === "custom";
+  for (const input of document.querySelectorAll("[data-rounding-step]")) {
+    const value = Number(input.value);
+    values[input.dataset.roundingStep] = input.value;
+    valid = valid && input.value.trim() !== "" && Number.isFinite(value) && value >= 0 && value <= 100;
+    total += Number.isFinite(value) ? value : 0;
+  }
+  const exact = valid && Math.abs(total - 100) < 0.000001;
+  const field = document.getElementById("amount-rounding-percentages");
+  if (field) field.value = JSON.stringify(values);
+  const label = document.getElementById("rounding-percentage-total");
+  if (label) {
+    label.textContent = `Total: ${Number(total.toFixed(2))}%${exact ? "" : " — enter percentages totaling 100%."}`;
+    label.classList.toggle("error-text", !exact);
+  }
+  for (const input of document.querySelectorAll("[data-rounding-step]")) {
+    input.setCustomValidity(custom && !exact ? "Enter percentages from 0 to 100 that total 100%." : "");
+  }
+  return exact;
+}
+
+function updateRoundingState() {
+  const mode = document.getElementById("amount-rounding-mode")?.value || "automatic";
+  const panel = document.getElementById("rounding-custom-panel");
+  if (panel) panel.hidden = mode !== "custom";
+  for (const input of document.querySelectorAll("[data-rounding-step]")) input.disabled = mode !== "custom";
+  const summary = document.getElementById("rounding-rule-summary");
+  if (summary) summary.textContent = mode === "automatic"
+    ? "Automatic: 70% in multiples of 1,000 or 500; 20% in multiples of 100 or 50; 10% in multiples of 5. Applied to debit and credit transactions combined, rounded to whole transaction counts."
+    : mode === "custom"
+      ? "Customize the percentage of transactions for each rounding figure below. The total must equal 100%."
+      : "Amounts use the selected rounding figure or combination. Select Customized percentages to control the share of transactions for each figure.";
+  updateRoundingPercentagesValue();
+}
+
 function getFormValues() {
+  updateRoundingPercentagesValue();
   updateMonthlyTransactionCountsValue();
   const values = {};
   for (const element of form.querySelectorAll("[name]")) {
@@ -263,6 +317,7 @@ function applyFormValues(values) {
       element.value = values[element.name];
     }
   }
+  loadRoundingPercentages(values.amount_rounding_percentages);
   updateManualRateState();
   updateRowCountState();
   updatePrependStatementState();
@@ -3384,6 +3439,9 @@ async function restoreSelectedUserDates() {
 }
 
 async function generateStatement() {
+  if (document.getElementById("amount-rounding-mode")?.value === "custom" && !updateRoundingPercentagesValue()) {
+    throw new Error("Enter rounding percentages from 0 to 100 that total 100%.");
+  }
   const payload = getFormValues();
   const result = await fetchJson(apiUrl("generate"), {
     method: "POST",
@@ -4452,6 +4510,13 @@ function showAsyncError(error) {
 }
 
 function bindEvents() {
+  document.getElementById("amount-rounding-mode")?.addEventListener("change", updateRoundingState);
+  for (const input of document.querySelectorAll("[data-rounding-step]")) {
+    input.addEventListener("input", () => {
+      updateRoundingPercentagesValue();
+      scheduleAutoProfileSave();
+    });
+  }
   document.getElementById("login-btn").addEventListener("click", async () => {
     try {
       await login();

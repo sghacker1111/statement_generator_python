@@ -7,6 +7,8 @@ from decimal import Decimal, ROUND_HALF_UP
 import random
 from typing import Literal
 
+from .rounding import parse_percentages, assign_rounding, adjust_plan
+
 from .utils import (
     ceil_two_decimals,
     format_amount,
@@ -88,6 +90,7 @@ class StatementConfig:
     withdrawal_min_amount: int = WITHDRAWAL_MIN_AMOUNT
     withdrawal_max_amount: int = WITHDRAWAL_MAX_AMOUNT
     amount_rounding_mode: str = "automatic"
+    amount_rounding_percentages: dict[int, float] = field(default_factory=dict)
     date_column_mode: str = "single"
     first_date_description: str = "Opening Balance"
     last_date_description: str = "Balance C/F"
@@ -433,14 +436,14 @@ AMOUNT_STEPS_BY_MODE = {
 
 def _normalize_amount_mode(value: str) -> str:
     normalized = str(value or "").strip().lower()
-    if normalized in AMOUNT_STEPS_BY_MODE:
+    if normalized in AMOUNT_STEPS_BY_MODE or normalized == "custom":
         return normalized
     return "automatic"
 
 
 def _amount_step_for_mode(mode: str) -> int:
     normalized = _normalize_amount_mode(mode)
-    return min(AMOUNT_STEPS_BY_MODE.get(normalized, (1_000, 500, 100)))
+    return min(AMOUNT_STEPS_BY_MODE.get(normalized, (100,)))
 
 
 def _amount_range(config: StatementConfig, event_type: EventType) -> tuple[int, int]:
@@ -451,7 +454,7 @@ def _amount_range(config: StatementConfig, event_type: EventType) -> tuple[int, 
     else:
         minimum = int(config.withdrawal_min_amount or WITHDRAWAL_MIN_AMOUNT)
         maximum = int(config.withdrawal_max_amount or WITHDRAWAL_MAX_AMOUNT)
-    step = _amount_step_for_mode(mode)
+    step = 5 if mode in {"automatic", "custom"} else _amount_step_for_mode(mode)
     safe_min = ((max(1, minimum) + step - 1) // step) * step
     safe_max = (max(1, maximum) // step) * step
     if safe_min > safe_max:
@@ -980,7 +983,11 @@ def _resequence_transaction_types(planned: list[PlannedEvent], rng: random.Rando
                 )
 
     if not layouts:
-        raise ValueError("Could not build a valid transaction run layout.")
+        sequence = ["deposit"] * deposit_total + ["withdrawal"] * withdrawal_total
+        rng.shuffle(sequence)
+        for event, kind in zip(planned, sequence):
+            event.event_type = kind
+        return
 
     scored_layouts: list[dict[str, object]] = []
     for item in layouts:
@@ -1053,7 +1060,7 @@ def _resequence_transaction_types(planned: list[PlannedEvent], rng: random.Rando
     run_lengths = [1] * total_runs
 
     if deposit_triple_runs > 0:
-        candidate_positions = deposit_run_positions[:-1] if len(deposit_run_positions) > 1 else deposit_run_positions[:]
+        candidate_positions = deposit_run_positions[:-1] if len(deposit_run_positions) > deposit_triple_runs else deposit_run_positions[:]
         middle_left = max(0, len(deposit_run_positions) // 4)
         middle_right = max(middle_left + 1, len(deposit_run_positions) - middle_left)
         preferred = candidate_positions[middle_left:middle_right]
@@ -1126,7 +1133,7 @@ def _plan_transaction_counts(
 
     month_count = len(month_items)
     high_density = bool(custom_targets) or target_statement_rows is not None
-    default_cap = 4 if month_count <= 18 else DEFAULT_MONTHLY_TRANSACTION_CAP
+    default_cap = max(4, (7 + month_count - 1) // month_count) if month_count <= 18 else DEFAULT_MONTHLY_TRANSACTION_CAP
     monthly_cap = CUSTOM_MONTHLY_TRANSACTION_CAP if high_density else default_cap
     capacities = [min(monthly_cap, len(days)) for _, days in month_items]
     max_user_rows = min(MAX_STATEMENT_ROWS - system_rows, sum(capacities))
@@ -1152,21 +1159,12 @@ def _plan_transaction_counts(
         desired_total = max_user_rows if min_user_rows >= max_user_rows else rng.randint(min_user_rows, max_user_rows)
         monthly_totals = _allocate_weighted_counts(capacities, desired_total, rng, minimums=[1] * month_count)
 
-    withdrawal_caps = [min(2, max(0, total - 1)) for total in monthly_totals]
-    withdrawal_cap_total = sum(withdrawal_caps)
-    if withdrawal_cap_total <= 0 and desired_total > 1:
-        raise ValueError("Could not allocate withdrawals across the selected months.")
-
-    if withdrawal_cap_total <= 0:
-        withdrawal_counts = [0] * month_count
-    else:
-        withdrawal_min = max(1, min(withdrawal_cap_total, round(desired_total * 0.39)))
-        withdrawal_max = min(withdrawal_cap_total, max(withdrawal_min, round(desired_total * 0.45)))
-        if withdrawal_max < withdrawal_min:
-            withdrawal_min = min(withdrawal_cap_total, max(1, round(desired_total * 0.42)))
-            withdrawal_max = withdrawal_min
-        withdrawal_total = withdrawal_min if withdrawal_min >= withdrawal_max else rng.randint(withdrawal_min, withdrawal_max)
-        withdrawal_counts = _allocate_weighted_counts(withdrawal_caps, withdrawal_total, rng)
+    gaps = [gap for gap in range(5, 11) if (desired_total - gap) % 2 == 0 and desired_total - gap >= 2]
+    if not gaps:
+        raise ValueError("At least 7 deposit/withdrawal transactions are needed for credits to exceed debits by 5 to 10. Increase the transaction count or period.")
+    gap = rng.choice(gaps)
+    withdrawal_total = (desired_total - gap) // 2
+    withdrawal_counts = _allocate_weighted_counts(monthly_totals, withdrawal_total, rng)
     deposit_counts = [monthly_totals[index] - withdrawal_counts[index] for index in range(month_count)]
     return month_items, monthly_totals, deposit_counts, withdrawal_counts, desired_total
 
@@ -1208,7 +1206,7 @@ def _create_transaction_plan(
 
     deposits = [event for event in planned if event.event_type == "deposit"]
     withdrawals = [event for event in planned if event.event_type == "withdrawal"]
-    amount_mode = _normalize_amount_mode(config.amount_rounding_mode)
+    amount_mode = "automatic" if config.amount_rounding_mode == "custom" else _normalize_amount_mode(config.amount_rounding_mode)
     deposit_min, deposit_max = _amount_range(config, "deposit")
     withdrawal_min, withdrawal_max = _amount_range(config, "withdrawal")
     deposit_low_max, deposit_mid_max, deposit_high_min = _amount_bands(deposit_min, deposit_max)
@@ -1558,12 +1556,22 @@ def _reconcile_plan(
     rng: random.Random,
     enforce_max_rows: bool = True,
 ) -> tuple[list[StatementRow], StatementSummary, float, date]:
+    if config.amount_rounding_mode in {"automatic", "custom"}:
+        steps = assign_rounding(plan, config, rng)
+        for _ in range(40):
+            result = simulate_statement(config, plan, opening_business_date, ending_business_date,
+                                        quarter_schedule, rng, enforce_max_rows=enforce_max_rows)
+            delta = round_money(config.target_closing_balance - result[2])
+            if abs(delta) <= 100 or not adjust_plan(plan, config, steps, delta, ending_business_date, rng):
+                return result
+        return simulate_statement(config, plan, opening_business_date, ending_business_date,
+                                  quarter_schedule, rng, enforce_max_rows=enforce_max_rows)
     tolerance = 100.0
     rows: list[StatementRow] = []
     summary = StatementSummary()
     final_balance = 0.0
     last_transaction_date = ending_business_date
-    amount_mode = _normalize_amount_mode(config.amount_rounding_mode)
+    amount_mode = "automatic" if config.amount_rounding_mode == "custom" else _normalize_amount_mode(config.amount_rounding_mode)
     deposit_min, deposit_max = _amount_range(config, "deposit")
     withdrawal_min, withdrawal_max = _amount_range(config, "withdrawal")
 
@@ -1755,6 +1763,8 @@ def validate_config(config: StatementConfig, require_growth: bool = True) -> Non
         raise ValueError("Deposit minimum and maximum amounts must be valid.")
     if config.withdrawal_min_amount < 1 or config.withdrawal_max_amount < config.withdrawal_min_amount:
         raise ValueError("Withdraw minimum and maximum amounts must be valid.")
+    if config.amount_rounding_mode == "custom":
+        parse_percentages(config.amount_rounding_percentages)
     _amount_range(config, "deposit")
     _amount_range(config, "withdrawal")
     if str(config.statement_row_mode).strip().lower() == "custom":

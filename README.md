@@ -13,7 +13,8 @@ This repository contains the Python web edition of Statement Generator V2, a res
 
 - Generates single-year and multi-year statements with exact balance reconciliation.
 - Supports configurable deposit and withdrawal ranges.
-- Provides automatic and mixed amount rounding down to 5-unit denominations.
+- Uses a combined 70% / 20% / 10% automatic rounding mix, with customizable transaction percentages.
+- Randomizes the credit transaction count to exceed debits by 5 to 10. See [rounding rules](ROUNDING_RULES.md).
 - Supports default and custom transaction counts for large statements.
 - Applies holiday, weekend, interest, and historical tax rules.
 - Adds earlier periods while matching an existing statement balance.
@@ -122,9 +123,9 @@ The browser editor can scan and update supported custom `.xlsx` and `.docx` form
 ## Verification
 
 ```powershell
-python -m unittest statement_generator.selftest statement_generator.test_holidays
+python -m unittest statement_generator.selftest statement_generator.test_holidays statement_generator.test_rounding
 node --check static/app.js
-node --test tests/holiday-ui.test.cjs
+node --test tests/*.test.cjs
 ```
 
 The test suite covers transaction planning, amount rules, historical tax handling, multi-year statements, balance reconciliation, validation, and recalculation.

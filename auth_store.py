@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 import hashlib
@@ -9,7 +10,7 @@ import os
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from uuid import uuid4
 
 
@@ -108,11 +109,16 @@ class AuthStore:
         self._lock = threading.Lock()
         self._initialize()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.database_path)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def _initialize(self) -> None:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1031,9 +1037,6 @@ class AuthStore:
             for row in rows
         ]
 
-        statement_counts: dict[int, int] = {}
-        for row in rows if effective_selected_user_id is not None else []:
-            statement_counts[int(users_by_id.get(int(row["id"]), {}).get("id", 0))] = 0
         count_rows: list[dict[str, object]] = []
         with self._lock, self._connect() as connection:
             count_query = """

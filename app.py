@@ -58,6 +58,7 @@ from statement_generator.generator import (  # noqa: E402
     validate_edited_statement,
     validate_transaction_dates,
 )
+from statement_generator.rounding import parse_percentages
 from statement_generator.holidays import MANUAL_HOLIDAY_SEED_VERSION, SUNDAY_HOLIDAY_START, is_recurring_holiday, manual_holiday_dates  # noqa: E402
 from statement_generator.importers import import_xlsx_statement  # noqa: E402
 from statement_generator.selftest import run_tests  # noqa: E402
@@ -105,7 +106,8 @@ DESCRIPTION_MODE_OPTIONS = {
 }
 DESCRIPTION_MODE_LABELS = {value: key for key, value in DESCRIPTION_MODE_OPTIONS.items()}
 AMOUNT_ROUNDING_OPTIONS = {
-    "Automatic (Present Rule)": "automatic",
+    "Automatic (70% / 20% / 10%)": "automatic",
+    "Customized percentages": "custom",
     "Rounding Figure 5": "round_5",
     "Rounding Figure 10": "round_10",
     "Rounding Figure 50": "round_50",
@@ -157,6 +159,7 @@ def profile_field_keys() -> list[str]:
         "withdrawal_min_amount",
         "withdrawal_max_amount",
         "amount_rounding_mode",
+        "amount_rounding_percentages",
         "interest_rate",
         "tax_rate",
         "cheque_start",
@@ -208,6 +211,7 @@ def default_form_values() -> dict[str, str]:
         "withdrawal_min_amount": "15000",
         "withdrawal_max_amount": "65000",
         "amount_rounding_mode": "automatic",
+        "amount_rounding_percentages": '{"1000":35,"500":35,"100":10,"50":10,"10":0,"5":10}',
         "interest_rate": "8",
         "tax_rate": "6",
         "cheque_start": "10000001",
@@ -2529,6 +2533,8 @@ def build_config(form_data: dict[str, object], forced_seed: int | None = None, u
         withdrawal_min_amount=_parse_amount_limit(text("withdrawal_min_amount"), 15_000),
         withdrawal_max_amount=_parse_amount_limit(text("withdrawal_max_amount"), 65_000),
         amount_rounding_mode=_normalize_amount_rounding_mode(text("amount_rounding_mode")),
+        amount_rounding_percentages=(parse_percentages(form_data.get("amount_rounding_percentages", ""))
+                                     if _normalize_amount_rounding_mode(text("amount_rounding_mode")) == "custom" else {}),
         interest_rate=_safe_float(text("interest_rate")),
         tax_rate=_safe_float(text("tax_rate")),
         cheque_start=_safe_int(text("cheque_start")),

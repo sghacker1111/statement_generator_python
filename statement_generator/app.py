@@ -22,6 +22,7 @@ from .exporters import (
 )
 from .generator import StatementConfig, generate_statement, names_from_text
 from .selftest import run_tests
+from .rounding import CUSTOM_DEFAULTS, parse_percentages
 from .holidays import MANUAL_HOLIDAY_SEED_VERSION, SUNDAY_HOLIDAY_START, is_recurring_holiday, manual_holiday_dates
 from .utils import format_amount, parse_iso_date, safe_filename
 
@@ -88,6 +89,8 @@ class StatementGeneratorApp(tk.Tk):
             "first_date_description": "Opening Balance",
             "last_date_description": "Balance C/F",
             "seed": "",
+            "amount_rounding_mode": "automatic",
+            **{f"rounding_{step}": str(value) for step, value in CUSTOM_DEFAULTS.items()},
             "deposit_text": "Cash Deposit",
             "withdrawal_text": "Cheque Withdrawal",
             "interest_text": "Interest Posted",
@@ -209,6 +212,27 @@ class StatementGeneratorApp(tk.Tk):
         for row, (label, key) in enumerate(labels):
             self._make_entry(parent, row, label, key)
 
+        rounding = ttk.LabelFrame(parent, text="Transaction Counts & Rounding", padding=8)
+        rounding.grid(row=len(labels), column=0, columnspan=2, sticky="ew", pady=8)
+        ttk.Label(rounding, text="Credits exceed debits by a random 5 to 10; at least 7 transactions.").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(rounding, text="Rounding type").grid(row=1, column=0, sticky="w")
+        selector = ttk.Combobox(rounding, textvariable=self.vars["amount_rounding_mode"],
+                               values=["automatic", "custom", "round_1000", "round_500", "round_100", "round_50", "round_10", "round_5"], state="readonly")
+        selector.grid(row=1, column=1, sticky="ew")
+        ttk.Label(rounding, text="Automatic: 70% at 1,000/500; 20% at 100/50; 10% at 5.").grid(row=2, column=0, columnspan=2, sticky="w")
+        self.rounding_custom_frame = ttk.Frame(rounding)
+        self.rounding_custom_frame.grid(row=3, column=0, columnspan=2, sticky="ew")
+        for row, step in enumerate(CUSTOM_DEFAULTS):
+            self._make_entry(self.rounding_custom_frame, row, f"Multiples of {step:,} (%)", f"rounding_{step}")
+        ttk.Label(self.rounding_custom_frame, text="Total must be 100%. Shared across debit and credit transactions.\nEach amount belongs to its largest matching figure.").grid(row=6, column=0, columnspan=2, sticky="w")
+        def update_rounding(*_args):
+            if self.vars["amount_rounding_mode"].get() == "custom":
+                self.rounding_custom_frame.grid()
+            else:
+                self.rounding_custom_frame.grid_remove()
+        self.vars["amount_rounding_mode"].trace_add("write", update_rounding)
+        update_rounding()
+
         note = (
             "Generation rules used here:\n"
             "- deposit amounts stay random instead of increasing from top to bottom\n"
@@ -218,7 +242,7 @@ class StatementGeneratorApp(tk.Tk):
             "- blocked dates come from the Holiday & Weekend manager"
         )
         ttk.Label(parent, text=note, justify="left", foreground="#374151").grid(
-            row=len(labels),
+            row=len(labels) + 1,
             column=0,
             columnspan=2,
             sticky="w",
@@ -789,6 +813,10 @@ class StatementGeneratorApp(tk.Tk):
             interest_rate=float(self.vars["interest_rate"].get()),
             tax_rate=float(self.vars["tax_rate"].get()),
             cheque_start=int(self.vars["cheque_start"].get()),
+            include_cheque_column=True,
+            amount_rounding_mode=self.vars["amount_rounding_mode"].get(),
+            amount_rounding_percentages=(parse_percentages({step: self.vars[f"rounding_{step}"].get() for step in CUSTOM_DEFAULTS})
+                                         if self.vars["amount_rounding_mode"].get() == "custom" else {}),
             deposit_text=self.vars["deposit_text"].get().strip(),
             withdrawal_text=self.vars["withdrawal_text"].get().strip(),
             interest_text=self.vars["interest_text"].get().strip(),

@@ -359,7 +359,7 @@ class GeneratorTests(unittest.TestCase):
         self.assertGreaterEqual(mean(withdrawal_double_event_ratios), 0.20)
         self.assertLessEqual(mean(withdrawal_double_event_ratios), 0.40)
 
-    def test_deposit_amounts_limit_repeats_and_keep_rounding_mix(self) -> None:
+    def test_deposit_amounts_limit_repeats_and_keep_amount_spread(self) -> None:
         result = generate_statement(self.build_config())
         deposits = [int(event.amount) for event in result.events if event.event_type == "deposit"]
         self.assertGreater(len(deposits), 6)
@@ -369,9 +369,6 @@ class GeneratorTests(unittest.TestCase):
         self.assertLessEqual(len(duplicate_groups), 2)
         self.assertGreater(max(deposits), 50_000)
         self.assertTrue(any(value <= 25_000 for value in deposits))
-        hundred_only_ratio = sum(1 for value in deposits if value % 500 != 0) / len(deposits)
-        self.assertGreaterEqual(hundred_only_ratio, 0.10)
-        self.assertLessEqual(hundred_only_ratio, 0.30)
 
     def test_edit_validation_flags_errors_and_recalculation_repairs_rows(self) -> None:
         config = self.build_config()
@@ -461,9 +458,11 @@ class GeneratorTests(unittest.TestCase):
 
 def run_tests() -> unittest.result.TestResult:
     from .test_holidays import HolidayTests
+    from .test_rounding import RoundingTests
     suite = unittest.TestSuite([
         unittest.defaultTestLoader.loadTestsFromTestCase(GeneratorTests),
         unittest.defaultTestLoader.loadTestsFromTestCase(HolidayTests),
+        unittest.defaultTestLoader.loadTestsFromTestCase(RoundingTests),
     ])
     return unittest.TextTestRunner(verbosity=2).run(suite)
 
