@@ -1,3 +1,4 @@
+import { createOfficeWorkspace } from "./office-workspace.js?v=20260915-office";
 const rootUrl = new URL("./", window.location.href);
 const apiUrl = (action, params = null) => {
   const url = new URL(`api/${action}`, rootUrl);
@@ -446,6 +447,7 @@ function renderSelectOptions(select, values, selectedValue) {
 }
 
 function renderTemplateList(select, templates) {
+  const previousValue = select.value;
   select.innerHTML = "";
   for (const template of templates) {
     const option = document.createElement("option");
@@ -456,8 +458,9 @@ function renderTemplateList(select, templates) {
     select.append(option);
   }
   if (select.options.length > 0) {
-    select.selectedIndex = 0;
+    select.value = templates.some(item => item.name === previousValue) ? previousValue : templates[0].name;
   }
+  queueMicrotask(() => OfficeWorkspace.refreshLetterhead());
 }
 
 function renderProfileFormats(payload) {
@@ -2293,15 +2296,11 @@ function applyInlineVerticalScript(command) {
 }
 
 function selectedNodeText() {
-  const node = selectedPrimaryFormatNode();
-  const wordTextNode = node?.querySelector?.(".word-edit-text");
-  return wordTextNode?.textContent ?? node?.textContent ?? "";
+  return OfficeWorkspace.text(selectedPrimaryFormatNode());
 }
 
 function workspaceTextForKey(key) {
-  const node = findFormatWorkspaceNode(key);
-  const wordTextNode = node?.querySelector?.(".word-edit-text");
-  return wordTextNode?.textContent ?? node?.textContent ?? "";
+  return OfficeWorkspace.text(findFormatWorkspaceNode(key));
 }
 
 function pushFormatUndoSnapshot(label = "Edit") {
@@ -2637,6 +2636,10 @@ function syncWorkspaceText(value) {
   }
   const node = findFormatWorkspaceNode(key);
   const wordTextNode = node?.querySelector?.(".word-edit-text");
+  if (node && (document.activeElement === node || node.contains(document.activeElement))) {
+    if (templateItemText) templateItemText.value = value;
+    return;
+  }
   if (wordTextNode && wordTextNode.textContent !== value) {
     wordTextNode.textContent = value;
   } else if (node && !wordTextNode && node.textContent !== value) {
@@ -2804,7 +2807,8 @@ function moveFormatSelectionByTab(event) {
 }
 
 function buildFormatSheetModel(detail) {
-  const items = templateEditorItems(detail);
+  const selectedSheet = detail.active_sheet || templateEditorSummary(detail)?.sheets?.[0]?.name;
+  const items = templateEditorItems(detail).filter(item => !item.sheet || item.sheet === selectedSheet);
   const context = buildFormatPositionContext(items);
   const cellMap = new Map();
   const covered = new Set();
@@ -2829,7 +2833,7 @@ function buildFormatSheetModel(detail) {
     maxCol = Math.max(maxCol, position.col + colspan - 1);
   });
   const summary = templateEditorSummary(detail);
-  const firstSheet = Array.isArray(summary.sheets) ? summary.sheets[0] : null;
+  const firstSheet = Array.isArray(summary.sheets) ? (summary.sheets.find(sheet => sheet.name === selectedSheet) || summary.sheets[0]) : null;
   maxRow = Math.max(maxRow, Number(firstSheet?.max_row || 0), 24);
   maxCol = Math.max(maxCol, Number(firstSheet?.max_column || 0), 1);
   return {
@@ -2847,6 +2851,7 @@ function renderHtmlPreviewFormat(detail) {
   const shell = document.createElement("div");
   shell.className = detail?.kind === "certificate" ? "word-page html-template-preview" : "html-template-preview";
   shell.innerHTML = String(detail?.html_preview || "");
+  OfficeWorkspace.scopePreviewStyles(shell);
   shell.querySelectorAll("table").forEach((table) => {
     Array.from(table.rows).forEach((rowNode, rowIndex) => {
       Array.from(rowNode.cells).forEach((cellNode, colIndex) => {
@@ -2878,7 +2883,7 @@ function renderHtmlPreviewFormat(detail) {
     });
     node.addEventListener("input", () => {
       selectFormatWorkspaceItem(key, node);
-      syncWorkspaceText(node.textContent || "");
+      syncWorkspaceText(OfficeWorkspace.text(node));
     });
   });
   formatSheetHost.replaceChildren(shell);
@@ -2954,7 +2959,7 @@ function renderFormatSheet(detail) {
         });
         td.addEventListener("input", () => {
           selectFormatWorkspaceItem(item.key, td);
-          syncWorkspaceText(td.textContent || "");
+          syncWorkspaceText(OfficeWorkspace.text(td));
         });
       } else {
         const virtualKey = `${model.sheetName}!${columnName(col)}${row}`;
@@ -2976,7 +2981,7 @@ function renderFormatSheet(detail) {
         });
         td.addEventListener("input", () => {
           selectFormatWorkspaceItem(virtualKey, td);
-          syncWorkspaceText(td.textContent || "");
+          syncWorkspaceText(OfficeWorkspace.text(td));
         });
       }
       tr.append(td);
@@ -3019,6 +3024,7 @@ function renderVisualFormatWorkspace(detail, selectedKey = "") {
   if (!formatWorkspacePanel || !formatSheetHost) {
     return;
   }
+  OfficeWorkspace.sheetPicker(detail, renderVisualFormatWorkspace);
   ensureFormatObjectOptions();
   const items = templateEditorItems(detail);
   const summary = templateEditorSummary(detail);
@@ -3045,60 +3051,16 @@ function renderVisualFormatWorkspace(detail, selectedKey = "") {
   } else {
     renderFormatSheet(detail);
   }
-  const nextKey = selectedKey || items[0]?.key || "";
+  const nextKey = selectedKey || items.find(item => !detail.active_sheet || !item.sheet || item.sheet === detail.active_sheet)?.key || "";
   if (nextKey) {
     selectFormatWorkspaceItem(nextKey);
   }
   applyFormatWorkspaceView();
+  OfficeWorkspace.rememberWorkspace();
 }
 
 async function saveSelectedWorkspaceItem() {
-  const key = state.formatWorkspaceSelectedKey;
-  if (!key) {
-    throw new Error("Click a cell or Word text block first.");
-  }
-  const style = collectTemplateStyleChanges();
-  const keys = state.formatWorkspaceMergeRequest ? [key] : (state.formatWorkspaceSelectedKeys.length ? state.formatWorkspaceSelectedKeys : [key]);
-  if (keys.length > 1) {
-    const values = getFormValues();
-    for (const selectedKey of keys) {
-      await fetchJson(apiUrl("template_update"), {
-        method: "POST",
-        body: JSON.stringify({
-          kind: state.templateEditorDetail.kind,
-          name: state.templateEditorDetail.name,
-          template_dir: values.template_dir,
-          key: selectedKey,
-          text: workspaceTextForKey(selectedKey),
-          style,
-        }),
-      });
-    }
-    await refreshTemplates();
-    await loadTemplateDetail(false);
-    appendLog(`Saved successfully: formatting applied to ${keys.length} selected cells.`, "success");
-    showFormatSaveStatus(`Saved ${keys.length} selected cells to the stored format.`, "success");
-    return;
-  }
-  if (templateItemSelect) {
-    templateItemSelect.value = key;
-  }
-  const liveText = workspaceTextForKey(key);
-  if (formatFormulaInput && formatFormulaInput.value !== liveText && document.activeElement === formatFormulaInput) {
-    syncWorkspaceText(formatFormulaInput.value);
-  } else {
-    if (formatFormulaInput) {
-      formatFormulaInput.value = liveText;
-    }
-    if (richRunsForKey(key).length) {
-      if (templateItemText) {
-        templateItemText.value = liveText;
-      }
-    } else {
-      syncWorkspaceText(liveText);
-    }
-  }
-  await saveTemplateItemEdit();
+  await OfficeWorkspace.saveWorkspace();
 }
 
 function insertObjectIntoSelectedWorkspaceCell() {
@@ -3587,66 +3549,9 @@ async function requestExportBlobForPrint(payload) {
   return response.blob();
 }
 
-function buildPrintHtml(sourceHtml, kind, autoPrint) {
-  const title = kind === "certificate" ? "Balance Certificate" : "Statement";
-  const toolbar = `
-<div class="print-toolbar">
-  <strong>${escapeHtml(title)} Print Preview</strong>
-  <button type="button" onclick="window.print()">Print</button>
-</div>`;
-  const printStyles = `
-<style>
-@page { size: A4; margin: 12mm; }
-html, body { background: #f4f7f9; }
-.print-toolbar {
-  position: sticky;
-  top: 0;
-  z-index: 9999;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  border-bottom: 1px solid #d7e0e7;
-  background: #ffffff;
-  color: #16324a;
-  font-family: Arial, sans-serif;
-}
-.print-toolbar button {
-  border: 0;
-  border-radius: 8px;
-  padding: 8px 14px;
-  background: #0f6c78;
-  color: #ffffff;
-  font-weight: 700;
-  cursor: pointer;
-}
-.date-cell, .statement-date-cell { white-space: nowrap !important; }
-@media print {
-  html, body { background: #ffffff !important; }
-  .print-toolbar { display: none !important; }
-}
-</style>`;
-  const printScript = autoPrint
-    ? `<script>window.addEventListener("load", function () { setTimeout(function () { window.focus(); window.print(); }, 350); });</script>`
-    : "";
-  let html = String(sourceHtml || "");
-  if (/<\/head>/i.test(html)) {
-    html = html.replace(/<\/head>/i, `${printStyles}</head>`);
-  } else {
-    html = `${printStyles}${html}`;
-  }
-  if (/<body[^>]*>/i.test(html)) {
-    html = html.replace(/<body[^>]*>/i, (match) => `${match}${toolbar}`);
-  } else {
-    html = `${toolbar}${html}`;
-  }
-  if (/<\/body>/i.test(html)) {
-    html = html.replace(/<\/body>/i, `${printScript}</body>`);
-  } else {
-    html = `${html}${printScript}`;
-  }
-  return html;
+const OfficeWorkspace = createOfficeWorkspace({apiUrl,fetchJson,state,formatSheetHost,getFormValues,richRunsForKey,showFormatSaveStatus,refreshTemplates,loadTemplateDetail,appendLog,escapeHtml});
+function buildPrintHtml(sourceHtml, kind, autoPrint, letterhead = {}) {
+  return OfficeWorkspace.buildPrintHtml(sourceHtml, kind, autoPrint, letterhead);
 }
 
 function slashDateText(value) {
@@ -3924,10 +3829,10 @@ async function ensureWorkingTransactionDates() {
 async function showGeneratedFormatPreview(autoPrint = false) {
   await ensureWorkingTransactionDates();
   const detail = state.templateEditorDetail || await loadTemplateDetail(true);
-  const html = buildGeneratedFormatPreviewHtml(detail);
-  const kind = detail?.kind === "certificate" ? "certificate" : "statement";
-  renderInlinePrintPreview(buildPrintHtml(html, kind, autoPrint), kind, autoPrint);
-  appendLog(`${kind === "certificate" ? "Word certificate" : "Excel statement"} generated format preview opened.`, "success");
+  const kind = detail.kind;
+  const blob = await requestExportBlobForPrint({...buildExportPayload(kind, "template", detail.name), print_preview_html:true});
+  const letterhead = await OfficeWorkspace.forPrint(kind, detail.name);
+  renderInlinePrintPreview(buildPrintHtml(await blob.text(), kind, autoPrint, letterhead), kind);
 }
 
 function closeInlinePrintPreview() {
@@ -3975,47 +3880,23 @@ function renderInlinePrintPreview(printHtml, kind, autoPrint = false) {
   frame.title = `${title} print preview`;
   frame.style.cssText = "width:min(100%, 1120px);height:calc(100vh - 58px);justify-self:center;border:0;background:#fff;box-shadow:0 18px 60px rgba(22,50,74,0.22);";
   frame.srcdoc = printHtml;
-  printButton.addEventListener("click", () => frame.contentWindow?.print());
+  printButton.addEventListener("click", async () => { try { await frame.contentWindow?.samplePrintReady; frame.contentWindow?.print(); } catch (error) { appendLog(error.message, "error"); } });
   closeButton.addEventListener("click", closeInlinePrintPreview);
   actions.append(printButton, closeButton);
   toolbar.append(label, actions);
   overlay.append(toolbar, frame);
   document.body.append(overlay);
-  if (autoPrint) {
-    frame.addEventListener("load", () => setTimeout(() => frame.contentWindow?.print(), 350), { once: true });
-  }
+
 }
 
 async function openPrintDocument(kind, autoPrint = false) {
-  if (!state.currentStatement) {
-    throw new Error("Generate, import, or load a statement before printing.");
-  }
-  const templateList = document.getElementById(kind === "certificate" ? "certificate-template-list" : "statement-template-list");
-  const templateName = templateList?.value || "";
-  const printFormatMode = document.getElementById("print-format-mode")?.value || "custom";
-  if (printFormatMode === "custom" && !templateName) {
-    throw new Error(`Select a ${kind === "certificate" ? "certificate" : "statement"} format first, or choose Normal Form for printing.`);
-  }
-  const payload = printFormatMode === "custom"
-    ? { ...buildExportPayload(kind, "template", templateName), print_preview_html: true }
-    : { ...buildExportPayload(kind, "normal"), print_preview_html: true };
-  const printWindow = window.open("", "_blank", "width=1100,height=800");
-  if (printWindow) {
-    printWindow.document.open();
-    printWindow.document.write("<!doctype html><title>Preparing Print</title><p style=\"font-family:Arial,sans-serif;padding:24px;\">Preparing print preview...</p>");
-    printWindow.document.close();
-  }
-  const blob = await requestExportBlobForPrint(payload);
-  const html = await blob.text();
-  const printHtml = buildPrintHtml(html, kind, autoPrint);
-  if (printWindow) {
-    printWindow.document.open();
-    printWindow.document.write(printHtml);
-    printWindow.document.close();
-  } else {
-    renderInlinePrintPreview(printHtml, kind, autoPrint);
-  }
-  appendLog(`${kind === "certificate" ? "Balance certificate" : "Statement"} ${printFormatMode === "custom" ? "customized format" : "normal form"} print ${autoPrint ? "sent to browser print" : "preview opened"}.`);
+  await ensureWorkingTransactionDates();
+  const templateName = document.getElementById(`${kind}-template-list`)?.value || "";
+  const mode = document.getElementById("print-format-mode")?.value === "custom" ? "template" : "normal";
+  if (mode === "template" && !templateName) throw new Error("Select a saved format first.");
+  const blob = await requestExportBlobForPrint({...buildExportPayload(kind, mode, templateName),print_preview_html:true});
+  const letterhead = await OfficeWorkspace.forPrint(kind, mode === "normal" ? "normal" : templateName);
+  renderInlinePrintPreview(buildPrintHtml(await blob.text(), kind, autoPrint, letterhead), kind);
 }
 
 function getDeviceRegistration() {
@@ -4937,7 +4818,7 @@ function bindEvents() {
   formatSaveOriginalButton?.addEventListener("click", async () => {
     try {
       await saveSelectedWorkspaceItem();
-      showFormatSaveStatus("Saved to original custom template format and refreshed from disk.", "success");
+
     } catch (error) {
       appendLog(error.message, "error");
       showFormatSaveStatus(error.message, "error");

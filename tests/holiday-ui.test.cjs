@@ -25,7 +25,9 @@ function fixture(root) {
     requestPassword: async () => { ctx.passwords++; return 'test-password'; },
     fetchJson: async (url, options) => { ctx.requests.push({ url, payload: JSON.parse(options.body) }); return ctx.response; },
     closeInlinePrintPreview: () => { ctx.closed++; }, renderValidationResults: (errors) => { ctx.errors = errors; },
-    loadTemplateDetail: async () => ({}), buildGeneratedFormatPreviewHtml: () => '<html></html>',
+    loadTemplateDetail: async () => ({kind:'statement',name:'Sample'}),
+    buildExportPayload: () => ({}), requestExportBlobForPrint: async () => ({text:async()=>'<html>SAMPLE</html>'}),
+    OfficeWorkspace: {forPrint:async()=>({})}, buildGeneratedFormatPreviewHtml: () => '<html></html>',
     buildPrintHtml: (html) => html, renderInlinePrintPreview: () => { ctx.previews++; }, appendLog() {},
   };
   element('holiday-type').value = 'Holiday';

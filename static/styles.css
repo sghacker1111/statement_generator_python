@@ -1915,3 +1915,12 @@ body.auth-locked #login-overlay {
     transition: none;
   }
 }
+
+/* Office content retains its own paragraph spacing and row dimensions. */
+.html-template-preview .word-block { margin:0; padding:0; min-height:0; border:none; }
+.html-template-preview .visual-cell { min-width:0; padding:0 2px; }
+.html-template-preview.word-page { padding:0; min-width:0; width:max-content; max-width:none; }
+.html-template-preview { color:#000; background:#fff; }
+.letterhead-panel { margin:12px 0; padding:12px; border:1px solid #b9c8ce; border-radius:8px; display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+.letterhead-panel legend {font-weight:700}
+#letterhead-thumbnail[hidden] {display:none!important}

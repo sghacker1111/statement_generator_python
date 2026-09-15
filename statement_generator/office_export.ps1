@@ -369,10 +369,6 @@ function Find-DataRange($Worksheet, $HeaderInfo) {
         }
     }
 
-    if ($endRow -lt $startRow) {
-        $endRow = $lastRow
-    }
-
     return @{
         Start = $startRow
         End = $endRow
@@ -400,11 +396,11 @@ function Test-SummaryStatementRow($Worksheet, $Row, $HeaderInfo) {
         $endCol = [Math]::Max($endCol, [int]$map["cheque"])
     }
     $rowText = (Get-WorksheetRowText $Worksheet $Row $startCol ([Math]::Min($endCol + 4, $endCol + 8))).ToLowerInvariant()
-    if ([string]::IsNullOrWhiteSpace($rowText) -or -not ($rowText -match "\b(total|summary|closing balance|balance in words?|transaction summary|notice)\b")) {
+    if ([string]::IsNullOrWhiteSpace($rowText) -or -not ($rowText -match "\b(total|summary|closing balance|balance in words?|transaction summary|notice|prepared by|checked by|verified by|approved by|authorized|signature|grand total|brought forward)\b")) {
         return $false
     }
     $dateText = (Get-CellText $Worksheet.Cells.Item($Row, $map["date"])).Trim()
-    if ($dateText -match "^\d{4}[-/]\d{1,2}[-/]\d{1,2}$") {
+    if ($dateText -match "^(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{4})$" -or $Worksheet.Cells.Item($Row, $map['date']).Value2 -is [double]) {
         return $false
     }
     return $true
@@ -558,12 +554,13 @@ function Expand-StatementRows($Worksheet, $DataRange, $RequiredCount) {
         }
     }
 
-    $templateRow = $DataRange.End
+    $templateRow = [Math]::Max($DataRange.Start - 1, $DataRange.End)
     $insertRow = $DataRange.End + 1
     for ($index = 0; $index -lt $needed; $index++) {
         $Worksheet.Rows.Item($templateRow).Copy() | Out-Null
         $Worksheet.Rows.Item($insertRow).Insert() | Out-Null
     }
+    $Worksheet.Application.CutCopyMode = $false
 }
 
 function Remove-UnusedStatementRows($Worksheet, $DataRange, $RequiredCount) {
@@ -621,9 +618,7 @@ function Set-BoldRowCells($Worksheet, $Row, $Columns) {
 
 function Write-StatementTotalsRow($Worksheet, $HeaderInfo, $DataRange, $Payload) {
     $totalRow = $DataRange.Start + $Payload.statement_rows.Count
-    if (-not (Test-TransactionTotalRow $Worksheet $totalRow $HeaderInfo)) {
-        $Worksheet.Rows.Item($totalRow).Insert() | Out-Null
-    }
+    if (-not (Test-TransactionTotalRow $Worksheet $totalRow $HeaderInfo)) { return 0 }
 
     Set-TextValue $Worksheet.Cells.Item($totalRow, $HeaderInfo.Map["description"]) "Total"
     Set-NumberValue $Worksheet.Cells.Item($totalRow, $HeaderInfo.Map["debit"]) (Get-StatementAmountTotal $Payload "debit") '_-* #,##0.00_-;\-* #,##0.00_-;_-* "-"??_-;_-@_-'
@@ -762,7 +757,9 @@ function Update-StatementWorkbook($Payload) {
     $excel.DisplayAlerts = $false
 
     try {
-        $workbook = $excel.Workbooks.Open($OutputPath)
+        $excel.AutomationSecurity = 3
+        $excel.AskToUpdateLinks = $false
+        $workbook = $excel.Workbooks.Open($OutputPath, 0)
         $selectedSheet = $null
         $headerInfo = $null
         foreach ($worksheet in $workbook.Worksheets) {
@@ -781,10 +778,8 @@ function Update-StatementWorkbook($Payload) {
         $dataRange = Find-DataRange $selectedSheet $headerInfo
         if ($Payload.statement_rows.Count -gt $dataRange.Capacity) {
             Expand-StatementRows $selectedSheet $dataRange $Payload.statement_rows.Count
-            $dataRange = Find-DataRange $selectedSheet $headerInfo
-            if ($Payload.statement_rows.Count -gt $dataRange.Capacity) {
-                throw "The generated statement has $($Payload.statement_rows.Count) rows, but the template only has space for $($dataRange.Capacity)."
-            }
+            $dataRange.End = $dataRange.Start + $Payload.statement_rows.Count - 1
+            $dataRange.Capacity = $Payload.statement_rows.Count
         }
 
         $headerMaxRow = [Math]::Min($headerInfo.Row - 1, 15)
@@ -860,6 +855,14 @@ function Update-StatementWorkbook($Payload) {
             Apply-WorksheetPrintSetup $worksheet
         }
 
+        foreach ($sampleSheet in $workbook.Worksheets) {
+            $sampleSheet.Rows.Item(1).Insert() | Out-Null
+            $sampleSheet.Cells.Item(1, 1).Value2 = "SAMPLE - NOT A BANK-ISSUED DOCUMENT"
+            $sampleSheet.Cells.Item(1, 1).Font.Bold = $true
+            $sampleSheet.Cells.Item(1, 1).Font.Color = 164
+            $sampleSheet.PageSetup.CenterHeader = "&B SAMPLE - NOT A BANK-ISSUED DOCUMENT"
+            $sampleSheet.PageSetup.PrintArea = $sampleSheet.UsedRange.Address()
+        }
         $workbook.Save()
         $workbook.Close($true)
     } finally {
@@ -877,8 +880,18 @@ function Get-UpdatedCertificateText($Text, $Payload) {
         return $originalText
     }
 
-    $trimmed = Expand-PayloadTokens $trimmed $Payload
+    $expanded = Expand-PayloadTokens $trimmed $Payload
+    if ($expanded -ne $trimmed) { return $expanded }
+    $trimmed = $expanded
     $lower = $trimmed.ToLowerInvariant()
+    if ($trimmed -match '^(?i)(ref\.?\s*(?:no\.?|number)?\s*:\s*)(.*?)(\t+| {2,})(date\s*:\s*)(.*)$') {
+        return $Matches[1] + (Convert-ToText $Payload.account.reference_no) + $Matches[3] + $Matches[4] + (Convert-ToText $Payload.statement.issue_date_slash)
+    }
+    if ($trimmed -match '^(?i)((?:name|account holder|address|permanent address|a/c no\.?|account no\.?|account number|a/c type|account type|total balance(?: npr)?|in words(?: npr| usd)?|equivalent(?: to)? usd|issue date|reference no\.?)\s*:\s*)(.*)$') {
+        $prefix = $Matches[1]
+        $field = Resolve-CertificateFieldValue $prefix $Payload
+        if ($null -ne $field) { return $prefix + $field }
+    }
     if ($lower -like "ref. no*") {
         if ([string]::IsNullOrWhiteSpace((Convert-ToText $Payload.account.reference_no))) {
             return [regex]::Replace($trimmed, "(?i)date\s*:\s*.*$", "Date: $($Payload.statement.issue_date_slash)")
@@ -917,6 +930,7 @@ function Get-UpdatedCertificateText($Text, $Payload) {
     if ($lower -like "(in words:*") {
         return "(In Words: $($Payload.certificate.balance_words_npr))"
     }
+    if ($lower -match "^(in words(?: npr)?|amount in words)\s*:") { return "In Words NPR: $($Payload.certificate.balance_words_npr)" }
     if ($lower.Contains("exchange rate")) {
         if ($lower.Contains("today")) {
             return "Note: Conversion has been done as per issue day exchange rate 1 USD = NPR $($Payload.rates.usd_npr_text)"
@@ -938,6 +952,7 @@ function Resolve-CertificateFieldValue($LabelText, $Payload) {
     if ([string]::IsNullOrWhiteSpace($lower)) {
         return $null
     }
+    if ($lower -match "^exchange.*rate") { return "1 USD = NPR $($Payload.rates.usd_npr_text)" }
     if ($lower -match "\b(ref|reference)\b") { return Convert-ToText $Payload.account.reference_no }
     if ($lower -match "\b(issue\s*)?date\b") { return Convert-ToText $Payload.statement.issue_date_slash }
     if ($lower -match "\b(name|account holder|customer)\b") { return Convert-ToText $Payload.account.customer_name }
@@ -957,9 +972,6 @@ function Resolve-CertificateFieldValue($LabelText, $Payload) {
 
 function Set-WordCellText($Cell, $Value) {
     $text = Convert-ToText $Value
-    if ([string]::IsNullOrWhiteSpace($text)) {
-        return
-    }
     $range = $Cell.Range
     if ($range.End -gt $range.Start) {
         $range.End = $range.End - 1
@@ -968,22 +980,33 @@ function Set-WordCellText($Cell, $Value) {
 }
 
 function Apply-CertificateTablePairUpdates($Row, $Payload) {
+    $changed = $false
     for ($index = 1; $index -lt $Row.Cells.Count; $index++) {
-        $labelText = Convert-ToText $Row.Cells.Item($index).Range.Text
-        $labelText = $labelText.Replace([string][char]13, "").Replace([string][char]7, "").Trim()
+        $labelText = (Convert-ToText $Row.Cells.Item($index).Range.Text).Replace([string][char]13, "").Replace([string][char]7, "").Trim()
+        if ($labelText -notmatch '^(?i)(name|account holder|customer name|address|permanent address|a/c (no\.?|number|type)|account (no\.?|number|type)|member id|currency|interest rate|exchange rate(?: on issue date)?|(?:issue )?date|ref(?:erence)?[ .]*(?:no\.?|number)?|(?:total |final )?balance(?: npr)?|equivalent(?: to)? usd|in words(?: npr| usd)?|amount in words)\s*[:.-]*$') { continue }
         $value = Resolve-CertificateFieldValue $labelText $Payload
         if ($null -ne $value) {
             Set-WordCellText $Row.Cells.Item($index + 1) $value
+            $index++
+            $changed = $true
         }
     }
+    return $changed
 }
 
 function Apply-ParagraphUpdate($Paragraph, $Payload) {
     $original = Convert-ToText $Paragraph.Range.Text
-    $clean = $original.Replace([string][char]13, "").Replace([string][char]7, "")
+    $clean = $original.TrimEnd([char]13, [char]7)
     $updated = Get-UpdatedCertificateText $clean $Payload
     if ($updated -ne $clean) {
-        $Paragraph.Range.Text = $updated + [char]13
+        $prefix = 0
+        while ($prefix -lt $clean.Length -and $prefix -lt $updated.Length -and $clean[$prefix] -ceq $updated[$prefix]) { $prefix++ }
+        $suffix = 0
+        while ($suffix -lt ($clean.Length - $prefix) -and $suffix -lt ($updated.Length - $prefix) -and $clean[$clean.Length-1-$suffix] -ceq $updated[$updated.Length-1-$suffix]) { $suffix++ }
+        $range = $Paragraph.Range.Duplicate
+        $start = $range.Start
+        $range.SetRange($start + $prefix, $start + $clean.Length - $suffix)
+        $range.Text = $updated.Substring($prefix, $updated.Length - $prefix - $suffix)
     }
 }
 
@@ -992,21 +1015,42 @@ function Update-CertificateDocument($Payload) {
     $word = New-Object -ComObject Word.Application
     $word.Visible = $false
     $word.DisplayAlerts = 0
+    $word.AutomationSecurity = 3
 
     try {
         $document = $word.Documents.Open($OutputPath, $false, $false)
         Apply-DocumentPrintSetup $document
-        foreach ($paragraph in $document.Paragraphs) {
-            Apply-ParagraphUpdate $paragraph $Payload
+        foreach ($story in $document.StoryRanges) {
+            $currentStory = $story
+            while ($null -ne $currentStory) {
+                foreach ($paragraph in $currentStory.Paragraphs) {
+                    if (-not $paragraph.Range.Information(12)) { Apply-ParagraphUpdate $paragraph $Payload }
+                }
+                $currentStory = $currentStory.NextStoryRange
+            }
         }
         foreach ($table in $document.Tables) {
             foreach ($row in $table.Rows) {
-                Apply-CertificateTablePairUpdates $row $Payload
+                $paired = Apply-CertificateTablePairUpdates $row $Payload
+                if ($paired) { continue }
                 foreach ($cell in $row.Cells) {
                     foreach ($paragraph in $cell.Range.Paragraphs) {
                         Apply-ParagraphUpdate $paragraph $Payload
                     }
                 }
+            }
+        }
+        $sampleRange = $document.Range(0, 0)
+        $sampleRange.InsertBefore("SAMPLE - NOT A BANK-ISSUED DOCUMENT`r")
+        $document.Paragraphs.Item(1).Range.Font.Bold = $true
+        $document.Paragraphs.Item(1).Range.Font.Color = 164
+        foreach ($section in $document.Sections) {
+            foreach ($header in $section.Headers) {
+                $labelRange = $header.Range.Duplicate
+                $labelRange.Collapse(0)
+                $labelRange.InsertBefore("`rSAMPLE - NOT A BANK-ISSUED DOCUMENT")
+                $labelRange.Font.Bold = $true
+                $labelRange.Font.Color = 164
             }
         }
         $document.Save()

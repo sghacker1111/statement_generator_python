@@ -370,6 +370,8 @@ def export_normal_statement(output_path: Path, payload: dict) -> None:
     ws.page_margins.bottom = 0.35
     ws.print_area = f"A1:{merge_end_column}{max(8, row_index - 1)}"
 
+    from .sample_documents import mark_workbook
+    mark_workbook(wb)
     wb.save(output_path)
 
 
@@ -414,6 +416,8 @@ def export_normal_certificate(output_path: Path, payload: dict) -> None:
         f"In Words USD: {payload['certificate']['balance_words_usd']}",
         f"Exchange Rate on Issue Date: 1 USD = NPR {payload['rates']['usd_npr_text']}",
         f"Issue Date: {payload['statement']['issue_date_slash']}",
+        f"Reference No.: {payload['account']['reference_no']}",
+        f"In Words NPR: {payload['certificate']['balance_words_npr']}",
     ]
     for line in lines:
         paragraph = doc.add_paragraph()
@@ -427,4 +431,6 @@ def export_normal_certificate(output_path: Path, payload: dict) -> None:
     signature = doc.add_paragraph("\n\nAuthorized Signature")
     signature.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
+    from .sample_documents import mark_document
+    mark_document(doc)
     doc.save(output_path)

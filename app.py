@@ -59,6 +59,10 @@ from statement_generator.generator import (  # noqa: E402
     validate_transaction_dates,
 )
 from statement_generator.rounding import parse_percentages
+from statement_generator.office_formats import convert_office, editable_office_copy
+from statement_generator.document_layout import word_html
+from statement_generator.sample_documents import sample_html
+from statement_generator.letterheads import load_letterhead, save_letterhead
 from statement_generator.holidays import MANUAL_HOLIDAY_SEED_VERSION, SUNDAY_HOLIDAY_START, is_recurring_holiday, manual_holiday_dates  # noqa: E402
 from statement_generator.importers import import_xlsx_statement  # noqa: E402
 from statement_generator.selftest import run_tests  # noqa: E402
@@ -1613,6 +1617,7 @@ def _scan_word_template(path: Path, profile: dict[str, str]) -> dict[str, object
 
 
 def scan_template_file(kind: str, path: Path, profile: dict[str, str] | None = None) -> dict[str, object]:
+    path = editable_office_copy(path)
     normalized_kind = kind.strip().lower()
     template_profile = _coerce_template_profile(profile or _read_template_meta(path).get("profile", {}))
     if normalized_kind == "statement":
@@ -1650,7 +1655,7 @@ def _annotated_entries(entries: list[TemplateEntry], source: str, editable: bool
             entry.name,
             entry.path,
             source=source,
-            editable=bool(editable and entry.path.suffix.lower() in {".xlsx", ".docx"}),
+            editable=bool(editable and entry.path.suffix.lower() in {".xlsx", ".xls", ".docx", ".doc"}),
         )
         for entry in entries
     ]
@@ -1745,7 +1750,7 @@ def save_uploaded_template(
         "name": base_name,
         "suffix": suffix,
         "source": "custom",
-        "editable": suffix in {".xlsx", ".docx"},
+        "editable": suffix in {".xlsx", ".xls", ".docx", ".doc"},
         "scan_summary": dict(meta.get("scan", {})).get("summary", {}) if isinstance(meta.get("scan"), dict) else {},
     }
 
@@ -1787,6 +1792,7 @@ def template_detail(kind: str, template_name: str, template_dir_text: str, user_
     selected = resolve_template_entry(normalized_kind, template_name, template_dir_text, user_id)
     if selected is None:
         raise ValueError("Selected template was not found.")
+    selected = _require_custom_template_entry(normalized_kind, template_name, template_dir_text, user_id)
     meta = _read_template_meta(selected.path)
     profile = _coerce_template_profile(meta.get("profile", {}))
     scan = scan_template_file(normalized_kind, selected.path, profile)
@@ -1797,9 +1803,11 @@ def template_detail(kind: str, template_name: str, template_dir_text: str, user_
         "name": selected.name,
         "suffix": selected.path.suffix.lower(),
         "source": selected.source,
-        "editable": bool(selected.editable and selected.source == "custom" and selected.path.suffix.lower() in {".xlsx", ".docx"}),
+        "editable": bool(selected.editable and selected.source == "custom"),
         "profile": profile,
         "scan": scan,
+        "html_preview": (re.search(r'<body>(.*)</body>', word_html(editable_office_copy(selected.path), selected.name, True), re.S).group(1)
+                         if normalized_kind == 'certificate' else ''),
     }
 
 
@@ -1808,7 +1816,13 @@ def _require_custom_template_entry(kind: str, template_name: str, template_dir_t
     if selected is None:
         raise ValueError("Selected template was not found.")
     if selected.source != "custom":
-        raise PermissionError("Bundled formats can be deleted/hidden, but only your uploaded custom formats can be edited.")
+        source = selected.path
+        directory = _custom_template_dir(kind, user_id)
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / (selected.name + source.suffix)
+        shutil.copy2(source, target)
+        _rescan_and_save_template_meta(kind, target)
+        selected = resolve_template_entry(kind, template_name, template_dir_text, user_id)
     return selected
 
 
@@ -2063,8 +2077,8 @@ def update_word_template_item(path: Path, key: str, text: str, style_payload: di
     from docx import Document  # noqa: E402
 
     document = Document(str(path))
-    _apply_word_page_setup(document)
     target_paragraph = None
+    target_cell = None
     if key == "__append_paragraph__":
         target_paragraph = document.add_paragraph(text or "New paragraph")
     elif key.startswith("p:"):
@@ -2081,7 +2095,11 @@ def update_word_template_item(path: Path, key: str, text: str, style_payload: di
             cell = document.tables[table_index].rows[row_index].cells[cell_index]
         except IndexError as error:
             raise ValueError("Selected table cell was not found in this format.") from error
+        target_cell = cell
         target_paragraph = cell.paragraphs[0] if cell.paragraphs else cell.add_paragraph()
+        if text != cell.text and not style_payload.get("paragraphs"):
+            for extra in list(cell.paragraphs[1:]):
+                extra._element.getparent().remove(extra._element)
     else:
         raise ValueError("Select a valid Word text block from the scanned format.")
 
@@ -2151,6 +2169,16 @@ def update_word_template_item(path: Path, key: str, text: str, style_payload: di
             paragraph.add_run(fallback)
         return True
 
+    if target_cell is not None and isinstance(style_payload.get('paragraphs'), list):
+        paragraphs = style_payload['paragraphs']
+        for index, data in enumerate(paragraphs):
+            p = target_cell.paragraphs[index] if index < len(target_cell.paragraphs) else target_cell.add_paragraph()
+            value = str(data.get('text', ''))
+            if p.text != value: set_paragraph_text_preserving_format(p, value)
+        for extra in list(target_cell.paragraphs[len(paragraphs):]):
+            extra._element.getparent().remove(extra._element)
+        document.save(str(path))
+        return
     rich_text_applied = set_paragraph_rich_text(target_paragraph, style_payload.get("rich_runs") if isinstance(style_payload, dict) else None, text)
     if not rich_text_applied:
         set_paragraph_text_preserving_format(target_paragraph, text)
@@ -2276,14 +2304,15 @@ def update_template_item(
     normalized_kind = kind.strip().lower()
     selected = _require_custom_template_entry(normalized_kind, template_name, template_dir_text, user_id)
     style = style_payload if isinstance(style_payload, dict) else {}
+    working_path = editable_office_copy(selected.path)
     if normalized_kind == "statement":
-        if selected.path.suffix.lower() != ".xlsx":
+        if working_path.suffix.lower() != ".xlsx":
             raise ValueError("Excel format editing needs an uploaded .xlsx file.")
-        update_excel_template_item(selected.path, key, text, style)
+        update_excel_template_item(working_path, key, text, style)
     elif normalized_kind == "certificate":
-        if selected.path.suffix.lower() != ".docx":
+        if working_path.suffix.lower() != ".docx":
             raise ValueError("Word format editing needs an uploaded .docx file.")
-        update_word_template_item(selected.path, key, text, style)
+        update_word_template_item(working_path, key, text, style)
     else:
         raise ValueError("Template kind must be statement or certificate.")
     meta = _rescan_and_save_template_meta(normalized_kind, selected.path)
@@ -2293,6 +2322,26 @@ def update_template_item(
         "name": selected.name,
         "scan": meta.get("scan", {}),
     }
+
+
+def update_template_batch(kind, name, template_dir, user_id, edits):
+    if not isinstance(edits, list) or len(edits) > 10000:
+        raise ValueError('Supply at most 10000 edited items.')
+    selected = _require_custom_template_entry(kind, name, template_dir, user_id)
+    original = editable_office_copy(selected.path)
+    temporary = original.with_name('.edit-' + uuid4().hex + original.suffix)
+    shutil.copy2(original, temporary)
+    try:
+        for edit in edits:
+            if not isinstance(edit, dict) or not edit.get('key'):
+                raise ValueError('Invalid format edit.')
+            updater = update_excel_template_item if kind == 'statement' else update_word_template_item
+            updater(temporary, str(edit['key']), str(edit.get('text', '')), dict(edit.get('style') or {}))
+        temporary.replace(original)
+        _rescan_and_save_template_meta(kind, selected.path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return {'saved': True, 'name': name}
 
 
 def create_statement_template_from_definition(name: str, definition: object, profile_payload: object, user_id: int | None = None) -> dict[str, object]:
@@ -2799,7 +2848,7 @@ th {{ background: #d9eaf7; text-transform: uppercase; font-size: 11px; }}
 </table>
 </body>
 </html>"""
-    return html.encode("utf-8")
+    return sample_html(html).encode("utf-8")
 
 
 def build_normal_certificate_bytes(export_payload: dict[str, object]) -> bytes:
@@ -2833,7 +2882,7 @@ h1 {{ text-align: center; letter-spacing: 0.05em; }}
   <p>This certificate is issued upon the request of the account holder for record purposes.</p>
 </body>
 </html>"""
-    return html.encode("utf-8")
+    return sample_html(html).encode("utf-8")
 
 
 def _openpyxl_color(value) -> str:
@@ -2969,7 +3018,7 @@ def build_excel_preview_html_bytes(path: Path, title: str = "Statement") -> byte
                 if address != start:
                     covered.add(address)
 
-    max_row = min(meaningful_max_row, 2_000)
+    max_row = meaningful_max_row
     max_col = min(meaningful_max_col, 80)
     colgroup = []
     for col_index in range(1, max_col + 1):
@@ -3014,32 +3063,11 @@ td {{ min-width: 28px; padding: 4px 6px; white-space: pre-wrap; }}
 </head>
 <body><table><colgroup>{''.join(colgroup)}</colgroup><tbody>{''.join(rows_html)}</tbody></table></body>
 </html>"""
-    return html.encode("utf-8")
+    return sample_html(html).encode("utf-8")
 
 
 def build_docx_preview_html_bytes(path: Path, title: str = "Balance Certificate") -> bytes:
-    from docx import Document  # noqa: E402
-
-    document = Document(path)
-    body_parts: list[str] = []
-    for paragraph in document.paragraphs:
-        if paragraph.text.strip():
-            body_parts.append(f"<p>{escape(paragraph.text)}</p>")
-    for table in document.tables:
-        rows = []
-        for row in table.rows:
-            cells = "".join(f"<td>{escape(cell.text)}</td>" for cell in row.cells)
-            rows.append(f"<tr>{cells}</tr>")
-        body_parts.append(f"<table>{''.join(rows)}</table>")
-    html = f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>{escape(title)}</title><style>
-@page {{ size: A4; margin: 12mm; }}
-body {{ font-family: Cambria, Georgia, serif; color: #16324a; line-height: 1.55; margin: 0; }}
-p {{ white-space: pre-wrap; }}
-table {{ border-collapse: collapse; width: 100%; margin: 10px 0; }}
-td, th {{ border: 1px solid #c9d3dd; padding: 6px 8px; white-space: pre-wrap; }}
-</style></head><body>{''.join(body_parts)}</body></html>"""
-    return html.encode("utf-8")
+    return sample_html(word_html(editable_office_copy(path), title)).encode("utf-8")
 
 
 def extract_bearer_token(headers) -> str:
@@ -3152,6 +3180,12 @@ class StatementWebHandler(BaseHTTPRequestHandler):
             if route.startswith("/site_integration/"):
                 relative = route.removeprefix("/site_integration/")
                 self._serve_file(APP_ROOT / "site_integration" / relative, base=APP_ROOT / "site_integration")
+                return
+            if route == "/api/letterhead":
+                current_user = self._require_statement_user()
+                query = parse_qs(parsed.query)
+                value = load_letterhead(APP_ROOT / 'letterheads', current_user.id, query.get('kind', [''])[0], query.get('name', [''])[0])
+                self._send_json({'letterhead': value})
                 return
             if route == "/api/bootstrap":
                 current_user = self._require_user()
@@ -3388,6 +3422,18 @@ class StatementWebHandler(BaseHTTPRequestHandler):
                 self._send_json(detail)
                 return
 
+            if route == "/api/letterhead":
+                current_user = self._require_statement_user()
+                payload = self._read_json_body()
+                value = save_letterhead(APP_ROOT / 'letterheads', current_user.id, str(payload.get('kind', '')), str(payload.get('name', '')), payload)
+                self._send_json({'letterhead': value})
+                return
+            if route == "/api/template_update_batch":
+                current_user = self._require_statement_user()
+                payload = self._read_json_body()
+                result = update_template_batch(str(payload.get('kind', '')), str(payload.get('name', '')), str(payload.get('template_dir', '')), current_user.id, payload.get('edits'))
+                self._send_json(result)
+                return
             if route == "/api/template_update":
                 current_user = self._require_statement_user()
                 payload = self._read_json_body()
@@ -3791,7 +3837,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
 
         filename = default_output_name(export_kind, config.customer_name, template_name or "normal", result.issue_date, suffix)
         if export_mode == "normal":
-            self._send_download(body, filename)
+            self._send_download(sample_html(body.decode("utf-8")).encode("utf-8"), filename)
             return
 
         WEB_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
@@ -3799,14 +3845,18 @@ class StatementWebHandler(BaseHTTPRequestHandler):
         temp_dir.mkdir(parents=True, exist_ok=True)
         try:
             output_path = temp_dir / filename
-            exporter(selected.path, output_path, export_payload)
+            source_path = editable_office_copy(selected.path)
+            working_output = output_path.with_suffix(source_path.suffix)
+            exporter(source_path, working_output, export_payload)
+            if working_output != output_path and not preview_html:
+                convert_office(working_output, output_path)
             if preview_html:
-                if export_kind == "statement" and output_path.suffix.lower() == ".xlsx":
-                    self._send_download(build_excel_preview_html_bytes(output_path, template_name or "Statement"), Path(filename).with_suffix(".html").name)
-                elif export_kind == "certificate" and output_path.suffix.lower() == ".docx":
-                    self._send_download(build_docx_preview_html_bytes(output_path, template_name or "Balance Certificate"), Path(filename).with_suffix(".html").name)
+                if export_kind == "statement" and working_output.suffix.lower() == ".xlsx":
+                    self._send_download(build_excel_preview_html_bytes(working_output, template_name or "Statement"), Path(filename).with_suffix(".html").name)
+                elif export_kind == "certificate" and working_output.suffix.lower() == ".docx":
+                    self._send_download(build_docx_preview_html_bytes(working_output, template_name or "Balance Certificate"), Path(filename).with_suffix(".html").name)
                 else:
-                    self._send_download(output_path.read_bytes(), filename)
+                    raise ValueError('This file could not be converted into a printable document.')
             else:
                 self._send_download(output_path.read_bytes(), filename)
         finally:

@@ -2,7 +2,7 @@
 
 This repository contains the Python web edition of Statement Generator V2, a responsive application for generating, checking, editing, printing, and exporting configurable financial statements and balance certificates.
 
-> This project is intended for authorized record preparation, internal workflows, demonstrations, and software testing. Generated documents must not be represented as official bank-issued records without authorization.
+> This project creates SAMPLE documents for demonstrations and software testing. Generated statements and certificates are visibly labelled and must not be represented as bank-issued records.
 
 ## Code repositories
 
@@ -137,3 +137,5 @@ The optional files in `site_integration/` can add a button from another website 
 ## Manual holidays
 
 The supplied 243 dates are included in `data/manual_holidays.json`. Saturdays are always blocked, and Sundays remain blocked from April 5, 2026 under the existing rule. Add other holidays in **Holidays & Weekends**. See [HOLIDAY_RULES.md](HOLIDAY_RULES.md) for editing, account migration, and deployment details.
+
+See [Office format editing, sample exports and A4 letterheads](OFFICE_FORMATS.md).
