@@ -5,7 +5,6 @@ from collections import Counter
 from dataclasses import asdict
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
-from statistics import mean
 
 from .generator import (
     StatementConfig,
@@ -92,9 +91,9 @@ class GeneratorTests(unittest.TestCase):
                     if event.event_type == "deposit":
                         self.assertGreaterEqual(amount, config.deposit_min_amount)
                         self.assertLessEqual(amount, config.deposit_max_amount)
-                else:
-                    self.assertGreaterEqual(amount, config.withdrawal_min_amount)
-                    self.assertLessEqual(amount, config.withdrawal_max_amount)
+                    else:
+                        self.assertGreaterEqual(amount, config.withdrawal_min_amount)
+                        self.assertLessEqual(amount, config.withdrawal_max_amount)
 
     def test_extra_text_description_modes_are_applied(self) -> None:
         config = self.build_config()
@@ -246,8 +245,7 @@ class GeneratorTests(unittest.TestCase):
             result = generate_statement(config)
             deposits = result.summary.deposit_count
             withdrawals = result.summary.withdrawal_count
-            self.assertGreater(deposits, withdrawals)
-            self.assertLessEqual(deposits - withdrawals, max(12, withdrawals))
+            self.assertTrue(45 * deposits <= 100 * withdrawals <= 70 * deposits)
 
     def test_consecutive_deposit_runs_stay_within_three(self) -> None:
         for seed in (123450, 123451, 123452, 123453, 123454, 123455, 123456, 123457, 123458, 123459):
@@ -315,49 +313,28 @@ class GeneratorTests(unittest.TestCase):
         self.assertTrue(saw_single)
         self.assertTrue(saw_triple)
 
-    def test_run_mix_stays_near_requested_percentages(self) -> None:
-        single_event_ratios: list[float] = []
-        double_event_ratios: list[float] = []
-        triple_event_ratios: list[float] = []
-        withdrawal_double_event_ratios: list[float] = []
-        for seed in (123450, 123451, 123452, 123453, 123454, 123455, 123456, 123457, 123458, 123459):
-            config = self.build_config()
-            config.seed = seed
-            result = generate_statement(config)
-            deposit_runs: list[int] = []
-            withdrawal_runs: list[int] = []
-            current_run = 0
-            current_type = ""
-            for event in result.events:
-                if event.event_type == current_type:
-                    current_run += 1
-                else:
-                    if current_type == "deposit":
-                        deposit_runs.append(current_run)
-                    elif current_type == "withdrawal":
-                        withdrawal_runs.append(current_run)
-                    current_type = event.event_type
-                    current_run = 1
-            if current_type == "deposit":
-                deposit_runs.append(current_run)
-            elif current_type == "withdrawal":
-                withdrawal_runs.append(current_run)
+    def test_run_layout_preserves_ratio_counts_and_randomizes_order(self) -> None:
+        from itertools import groupby
+        import random
+        from .generator import PlannedEvent, _resequence_transaction_types
 
-            deposit_total = sum(deposit_runs)
-            withdrawal_total = sum(withdrawal_runs)
-            single_event_ratios.append(sum(run for run in deposit_runs if run == 1) / deposit_total)
-            double_event_ratios.append(sum(run for run in deposit_runs if run == 2) / deposit_total)
-            triple_event_ratios.append(sum(run for run in deposit_runs if run == 3) / deposit_total)
-            withdrawal_double_event_ratios.append(sum(run for run in withdrawal_runs if run == 2) / withdrawal_total)
-
-        self.assertGreaterEqual(mean(single_event_ratios), 0.15)
-        self.assertLessEqual(mean(single_event_ratios), 0.35)
-        self.assertGreaterEqual(mean(double_event_ratios), 0.50)
-        self.assertLessEqual(mean(double_event_ratios), 0.70)
-        self.assertGreaterEqual(mean(triple_event_ratios), 0.10)
-        self.assertLessEqual(mean(triple_event_ratios), 0.25)
-        self.assertGreaterEqual(mean(withdrawal_double_event_ratios), 0.20)
-        self.assertLessEqual(mean(withdrawal_double_event_ratios), 0.40)
+        for credits, debits in ((8, 5), (11, 5), (20, 9), (100, 45), (100, 70), (1000, 450)):
+            orders = set()
+            for seed in range(10):
+                plan = [PlannedEvent(kind, date(2026, 1, 1), 0) for kind in
+                        ["deposit"] * credits + ["withdrawal"] * debits]
+                _resequence_transaction_types(plan, random.Random(seed))
+                sequence = tuple(event.event_type for event in plan)
+                orders.add(sequence)
+                self.assertEqual(sequence.count("deposit"), credits)
+                self.assertEqual(sequence.count("withdrawal"), debits)
+                runs = [(kind, len(list(items))) for kind, items in groupby(sequence)]
+                debit_runs = [length for kind, length in runs if kind == "withdrawal"]
+                self.assertIn(1, debit_runs)
+                self.assertIn(2, debit_runs)
+                self.assertLessEqual(max(debit_runs), 2)
+                self.assertLessEqual(max(length for kind, length in runs if kind == "deposit"), 3)
+            self.assertGreater(len(orders), 1)
 
     def test_deposit_amounts_limit_repeats_and_keep_amount_spread(self) -> None:
         result = generate_statement(self.build_config())

@@ -1,6 +1,7 @@
 from collections import Counter
 from dataclasses import asdict
 from datetime import date, timedelta
+from itertools import groupby
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 import json
@@ -12,8 +13,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from .generator import _plan_transaction_counts, generate_statement, validate_config
-from .rounding import amount_class, parse_percentages
+from .generator import (_plan_transaction_counts, _reconcile_plan, PlannedEvent,
+                        generate_statement, validate_config)
+from .rounding import amount_class, parse_percentages, assign_rounding, prepare_mix
 from . import selftest
 
 
@@ -31,28 +33,40 @@ class RoundingTests(unittest.TestCase):
             self.assertLess(abs(counts[step] - total * percent / 100), 1.000001)
         self.assertEqual(sum(counts[step] for step, percent in expected.items() if percent == 0), 0)
 
-    def test_all_six_credit_count_differences_are_possible(self):
+    def assert_transaction_mix(self, result):
+        credits = [row.credit for row in result.rows if row.category == "deposit"]
+        debits = [row.debit for row in result.rows if row.category == "withdrawal"]
+        self.assertTrue(45 * len(credits) <= 100 * len(debits) <= 70 * len(credits))
+        high = sum(value > 50000 for value in debits)
+        low = sum(value < 30000 for value in credits)
+        self.assertTrue(10 * len(debits) <= 100 * high <= 20 * len(debits))
+        self.assertTrue(20 * len(credits) <= 100 * low <= 30 * len(credits))
+        types = [row.category for row in result.rows if row.category in {"deposit", "withdrawal"}]
+        runs = [len(list(items)) for kind, items in groupby(types) if kind == "withdrawal"]
+        self.assertIn(1, runs)
+        self.assertIn(2, runs)
+
+    def test_debit_ratio_varies_without_changing_requested_total(self):
         months = {(2026, m): [date(2026, m, 1) + timedelta(days=n) for n in range(20)] for m in range(1, 13)}
-        gaps = set()
+        observed = set()
         for seed in range(30):
             for total in (59, 60):
                 _, totals, deposits, withdrawals, desired = _plan_transaction_counts(months, 0, total, random.Random(seed))
                 self.assertEqual(desired, total)
                 self.assertEqual(sum(totals), total)
                 self.assertEqual(sum(deposits) + sum(withdrawals), total)
-                gap = sum(deposits) - sum(withdrawals)
-                self.assertIn(gap, range(5, 11))
-                gaps.add(gap)
-        self.assertEqual(gaps, set(range(5, 11)))
+                self.assertTrue(45 * sum(deposits) <= 100 * sum(withdrawals) <= 70 * sum(deposits))
+                observed.add(sum(withdrawals))
+        self.assertGreater(len(observed), 3)
 
-    def test_custom_monthly_counts_stay_exact_with_random_credit_gap(self):
+    def test_custom_monthly_counts_stay_exact_with_transaction_mix(self):
         config = self.config()
         config.start_date, config.end_date = date(2026, 1, 1), date(2026, 12, 31)
         config.transaction_count_mode = "custom"
         config.monthly_transaction_counts = {(2026, month): 5 for month in range(1, 13)}
         result = generate_statement(config)
         self.assertEqual(Counter((row.date.year, row.date.month) for row in result.rows if row.category in {"deposit", "withdrawal"}), config.monthly_transaction_counts)
-        self.assertIn(result.summary.deposit_count - result.summary.withdrawal_count, (6, 8, 10))
+        self.assert_transaction_mix(result)
 
     def test_automatic_percentages_hold_after_reconciliation(self):
         for seed in (123456, 123457, 123458):
@@ -65,7 +79,7 @@ class RoundingTests(unittest.TestCase):
                 self.assertLess(abs(counts[group] - len(amounts) * percentage / 100), 1.000001)
             self.assertEqual(len(amounts), len(result.events))
             self.assertTrue(all(amount % 5 == 0 for amount in amounts))
-            self.assertIn(result.summary.deposit_count - result.summary.withdrawal_count, range(5, 11))
+            self.assert_transaction_mix(result)
             self.assertLessEqual(abs(result.final_balance - config.target_closing_balance), 3000)
 
     def test_custom_percentages_apply_to_both_columns_together(self):
@@ -73,6 +87,7 @@ class RoundingTests(unittest.TestCase):
         config = self.config("custom", percentages)
         result = generate_statement(config)
         self.assert_quotas(result.rows, percentages)
+        self.assert_transaction_mix(result)
         for row in result.rows:
             if row.category == "deposit":
                 self.assertTrue(config.deposit_min_amount <= row.credit <= config.deposit_max_amount)
@@ -86,6 +101,7 @@ class RoundingTests(unittest.TestCase):
             config = self.config("custom", {step: 100})
             result = generate_statement(config)
             self.assertTrue(all(amount_class(int(event.amount)) == step for event in result.events))
+            self.assert_transaction_mix(result)
 
     def test_invalid_percentages_are_rejected(self):
         for values in ({}, [], {1000: 70}, {1000: -1, 500: 101}, {1000: float("nan")},
@@ -96,14 +112,71 @@ class RoundingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_config(self.config("custom", {1000: 99}))
 
-    def test_tiny_counts_require_at_least_seven_transactions(self):
+    def test_tiny_counts_require_thirteen_transactions_for_all_quotas(self):
         months = {(2026, 1): [date(2026, 1, 1) + timedelta(days=n) for n in range(20)]}
-        with self.assertRaisesRegex(ValueError, "At least 7"):
-            _plan_transaction_counts(months, 0, 6, random.Random(1))
-        for total in (7, 8, 9, 10):
+        for total in (6, 7, 10, 12):
+            with self.assertRaisesRegex(ValueError, "At least 13"):
+                _plan_transaction_counts(months, 0, total, random.Random(1))
+        for total in (13, 14, 15, 16):
             _, _, deposits, withdrawals, _ = _plan_transaction_counts(months, 0, total, random.Random(1))
-            self.assertGreater(sum(withdrawals), 0)
-            self.assertIn(sum(deposits) - sum(withdrawals), range(5, 11))
+            self.assertGreaterEqual(sum(withdrawals), 5)
+            self.assertTrue(45 * sum(deposits) <= 100 * sum(withdrawals) <= 70 * sum(deposits))
+
+    def test_amount_mix_survives_legacy_modes_and_extreme_target_adjustments(self):
+        for mode in ("automatic", "round_1000", "round_50", "round_5"):
+            for growth in (100000, 1100000):
+                config = self.config(mode)
+                config.target_closing_balance = config.opening_balance + growth
+                result = generate_statement(config)
+                self.assert_transaction_mix(result)
+                self.assertLessEqual(abs(result.final_balance - config.target_closing_balance), 3000)
+
+    def test_minimum_statement_includes_strict_amount_boundaries(self):
+        config = self.config("custom", {5: 100})
+        config.start_date, config.end_date = date(2026, 1, 1), date(2026, 1, 31)
+        config.transaction_count_mode = "custom"
+        config.monthly_transaction_counts = {(2026, 1): 13}
+        config.interest_rate = 0
+        config.target_closing_balance = config.opening_balance + 80000
+        config.deposit_min_amount, config.deposit_max_amount = 29995, 30005
+        config.withdrawal_min_amount, config.withdrawal_max_amount = 14995, 50005
+        result = generate_statement(config)
+        self.assertEqual(len(result.events), 13)
+        self.assert_transaction_mix(result)
+
+    def test_limits_that_exclude_required_amount_groups_are_rejected(self):
+        for field, value in (("withdrawal_max_amount", 50000), ("withdrawal_min_amount", 50001),
+                             ("deposit_min_amount", 30000), ("deposit_max_amount", 29999)):
+            config = self.config()
+            setattr(config, field, value)
+            with self.assertRaisesRegex(ValueError, "amount (groups|mix)"):
+                generate_statement(config)
+
+    def test_large_statement_reconciles_without_losing_amount_quotas(self):
+        config = self.config()
+        config.start_date, config.end_date = date(2026, 1, 1), date(2026, 12, 31)
+        config.interest_rate = 0
+        config.target_closing_balance = config.opening_balance + 100000
+        # Start far above the target: more than 40 individual amounts must move.
+        plan = [PlannedEvent("deposit", date(2026, 2, 2), 90000) for _ in range(160)]
+        plan += [PlannedEvent("withdrawal", date(2026, 2, 3), 15000) for _ in range(90)]
+        rows, summary, balance, _ = _reconcile_plan(config, plan, config.start_date,
+                                                   config.end_date, [], random.Random(1))
+        self.assertLessEqual(abs(balance - config.target_closing_balance), 3000)
+        self.assertTrue(10 * 90 <= 100 * sum(event.amount > 50000 for event in plan if event.event_type == "withdrawal") <= 20 * 90)
+        self.assertTrue(20 * 160 <= 100 * sum(event.amount < 30000 for event in plan if event.event_type == "deposit") <= 30 * 160)
+
+    def test_narrow_limits_allocate_feasible_amount_groups_without_retries(self):
+        config = self.config("custom", {1000: 88, 5: 12})
+        config.deposit_min_amount, config.deposit_max_amount = 29995, 30005
+        for seed in range(5):
+            mix = prepare_mix(500, config, random.Random(seed))
+            self.assertTrue(200 <= sum(mix["demands"][2:]) <= 205)
+            plan = [PlannedEvent("deposit", date(2026, 2, 2), 30000) for _ in range(295)]
+            plan += [PlannedEvent("withdrawal", date(2026, 2, 3), 25000) for _ in range(205)]
+            assign_rounding(plan, config, random.Random(seed))
+            self.assertEqual(Counter(amount_class(int(event.amount)) for event in plan), {1000: 440, 5: 60})
+            self.assertIn(sum(event.amount < 30000 for event in plan[:295]), (59, 60))
 
     def test_web_config_preserves_custom_percentage_field(self):
         import app

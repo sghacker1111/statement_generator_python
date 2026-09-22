@@ -214,7 +214,7 @@ class StatementGeneratorApp(tk.Tk):
 
         rounding = ttk.LabelFrame(parent, text="Transaction Counts & Rounding", padding=8)
         rounding.grid(row=len(labels), column=0, columnspan=2, sticky="ew", pady=8)
-        ttk.Label(rounding, text="Credits exceed debits by a random 5 to 10; at least 7 transactions.").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(rounding, text="Debit count: 45–70% of credits; at least 13 customer transactions.\n10–20% of debits above 50,000; 20–30% of credits below 30,000.\nRandom single and paired debits. Interest, tax, and balance rows excluded.").grid(row=0, column=0, columnspan=2, sticky="w")
         ttk.Label(rounding, text="Rounding type").grid(row=1, column=0, sticky="w")
         selector = ttk.Combobox(rounding, textvariable=self.vars["amount_rounding_mode"],
                                values=["automatic", "custom", "round_1000", "round_500", "round_100", "round_50", "round_10", "round_5"], state="readonly")

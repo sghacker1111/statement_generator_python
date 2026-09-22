@@ -7,7 +7,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import random
 from typing import Literal
 
-from .rounding import parse_percentages, assign_rounding, adjust_plan
+from .rounding import parse_percentages, assign_rounding, adjust_plan, validate_amount_mix, prepare_mix
 
 from .utils import (
     ceil_two_decimals,
@@ -915,12 +915,12 @@ def _resequence_transaction_types(planned: list[PlannedEvent], rng: random.Rando
 
     layouts: list[dict[str, object]] = []
     max_withdrawal_pairs = min(3, withdrawal_total // 2)
-    for withdrawal_pair_runs in range(max_withdrawal_pairs + 1):
+    for withdrawal_pair_runs in range(1, max_withdrawal_pairs + 1):
         withdrawal_runs = withdrawal_total - withdrawal_pair_runs
         if withdrawal_runs <= 0:
             continue
         withdrawal_single_runs = withdrawal_runs - withdrawal_pair_runs
-        if withdrawal_single_runs < 0:
+        if withdrawal_single_runs < 1:
             continue
 
         for start_type, end_type in (
@@ -937,7 +937,7 @@ def _resequence_transaction_types(planned: list[PlannedEvent], rng: random.Rando
             if deposit_runs <= 0:
                 continue
 
-            for deposit_triple_runs in range(0, min(2, deposit_runs) + 1):
+            for deposit_triple_runs in range(0, min(deposit_total // 3, deposit_runs) + 1):
                 deposit_single_runs = (2 * deposit_runs) - deposit_total + deposit_triple_runs
                 deposit_double_runs = deposit_total - deposit_runs - (2 * deposit_triple_runs)
                 if deposit_single_runs < 0 or deposit_double_runs < 0:
@@ -983,11 +983,7 @@ def _resequence_transaction_types(planned: list[PlannedEvent], rng: random.Rando
                 )
 
     if not layouts:
-        sequence = ["deposit"] * deposit_total + ["withdrawal"] * withdrawal_total
-        rng.shuffle(sequence)
-        for event, kind in zip(planned, sequence):
-            event.event_type = kind
-        return
+        raise ValueError("The transaction counts cannot fit both single and consecutive debit runs.")
 
     scored_layouts: list[dict[str, object]] = []
     for item in layouts:
@@ -1133,7 +1129,7 @@ def _plan_transaction_counts(
 
     month_count = len(month_items)
     high_density = bool(custom_targets) or target_statement_rows is not None
-    default_cap = max(4, (7 + month_count - 1) // month_count) if month_count <= 18 else DEFAULT_MONTHLY_TRANSACTION_CAP
+    default_cap = max(4, (13 + month_count - 1) // month_count) if month_count <= 18 else DEFAULT_MONTHLY_TRANSACTION_CAP
     monthly_cap = CUSTOM_MONTHLY_TRANSACTION_CAP if high_density else default_cap
     capacities = [min(monthly_cap, len(days)) for _, days in month_items]
     max_user_rows = min(MAX_STATEMENT_ROWS - system_rows, sum(capacities))
@@ -1159,11 +1155,12 @@ def _plan_transaction_counts(
         desired_total = max_user_rows if min_user_rows >= max_user_rows else rng.randint(min_user_rows, max_user_rows)
         monthly_totals = _allocate_weighted_counts(capacities, desired_total, rng, minimums=[1] * month_count)
 
-    gaps = [gap for gap in range(5, 11) if (desired_total - gap) % 2 == 0 and desired_total - gap >= 2]
-    if not gaps:
-        raise ValueError("At least 7 deposit/withdrawal transactions are needed for credits to exceed debits by 5 to 10. Increase the transaction count or period.")
-    gap = rng.choice(gaps)
-    withdrawal_total = (desired_total - gap) // 2
+    # D / C lies in [45%, 70%], with C + D equal to the requested total.
+    minimum_debits = max(5, (45 * desired_total + 144) // 145)
+    maximum_debits = 70 * desired_total // 170
+    if desired_total < 13 or minimum_debits > maximum_debits:
+        raise ValueError("At least 13 customer transactions are needed for the debit/credit ratio and amount groups. Increase the transaction count or period.")
+    withdrawal_total = rng.randint(minimum_debits, maximum_debits)
     withdrawal_counts = _allocate_weighted_counts(monthly_totals, withdrawal_total, rng)
     deposit_counts = [monthly_totals[index] - withdrawal_counts[index] for index in range(month_count)]
     return month_items, monthly_totals, deposit_counts, withdrawal_counts, desired_total
@@ -1175,7 +1172,7 @@ def _create_transaction_plan(
     ending_business_date: date,
     quarter_schedule: list[tuple[date, date]],
     rng: random.Random,
-) -> list[PlannedEvent]:
+) -> tuple[list[PlannedEvent], dict]:
     posting_dates = {posting_date for _, posting_date in quarter_schedule}
     reserved_days = {opening_business_date, *posting_dates}
     if _uses_closing_description_row(config):
@@ -1190,6 +1187,9 @@ def _create_transaction_plan(
         config.monthly_transaction_counts if config.transaction_count_mode == "custom" else None,
     )
 
+    mix = prepare_mix(_desired_total, config, rng)
+    withdrawal_counts = _allocate_weighted_counts(_monthly_totals, sum(mix["demands"][2:]), rng)
+    deposit_counts = [total - withdrawals for total, withdrawals in zip(_monthly_totals, withdrawal_counts)]
     planned: list[PlannedEvent] = []
     used_day_numbers: set[int] = set()
     for index, (_month_key, available_days) in enumerate(month_items):
@@ -1319,7 +1319,7 @@ def _create_transaction_plan(
         _force_final_transaction_date(planned, ending_business_date, posting_dates)
 
     planned.sort(key=lambda item: (item.date, 0 if item.event_type == "withdrawal" else 1))
-    return planned
+    return planned, mix
 
 
 def _force_final_transaction_date(
@@ -1555,136 +1555,18 @@ def _reconcile_plan(
     quarter_schedule: list[tuple[date, date]],
     rng: random.Random,
     enforce_max_rows: bool = True,
+    amount_mix: dict | None = None,
 ) -> tuple[list[StatementRow], StatementSummary, float, date]:
-    if config.amount_rounding_mode in {"automatic", "custom"}:
-        steps = assign_rounding(plan, config, rng)
-        for _ in range(40):
-            result = simulate_statement(config, plan, opening_business_date, ending_business_date,
-                                        quarter_schedule, rng, enforce_max_rows=enforce_max_rows)
-            delta = round_money(config.target_closing_balance - result[2])
-            if abs(delta) <= 100 or not adjust_plan(plan, config, steps, delta, ending_business_date, rng):
-                return result
-        return simulate_statement(config, plan, opening_business_date, ending_business_date,
-                                  quarter_schedule, rng, enforce_max_rows=enforce_max_rows)
-    tolerance = 100.0
-    rows: list[StatementRow] = []
-    summary = StatementSummary()
-    final_balance = 0.0
-    last_transaction_date = ending_business_date
-    amount_mode = "automatic" if config.amount_rounding_mode == "custom" else _normalize_amount_mode(config.amount_rounding_mode)
-    deposit_min, deposit_max = _amount_range(config, "deposit")
-    withdrawal_min, withdrawal_max = _amount_range(config, "withdrawal")
-
-    for _ in range(24):
-        rows, summary, final_balance, last_transaction_date = simulate_statement(
-            config,
-            plan,
-            opening_business_date,
-            ending_business_date,
-            quarter_schedule,
-            rng,
-            enforce_max_rows=enforce_max_rows,
-        )
-        delta = round_money(config.target_closing_balance - final_balance)
-        if abs(delta) <= tolerance:
-            return rows, summary, final_balance, last_transaction_date
-
-        remaining = round_to_step(delta)
-        if remaining > 0:
-            deposit_events = _latest_events_by_type(plan, "deposit")
-            if deposit_events:
-                current_total = round_to_step(sum(event.amount for event in deposit_events))
-                updated_amounts = _rebalance_amounts_to_total(
-                    [int(round(event.amount)) for event in deposit_events],
-                    _bounded_total_target(current_total + remaining, len(deposit_events), deposit_min, deposit_max, amount_mode),
-                    deposit_min,
-                    deposit_max,
-                    rng,
-                    mode=amount_mode,
-                )
-                updated_amounts = _limit_duplicate_amounts(updated_amounts, deposit_min, deposit_max, rng, mode=amount_mode)
-                if amount_mode == "automatic":
-                    updated_amounts = _normalize_hundred_only_ratio(
-                        updated_amounts,
-                        current_total + remaining,
-                        deposit_min,
-                        deposit_max,
-                        rng,
-                    )
-                    updated_amounts = _ensure_low_band_amount(
-                        updated_amounts,
-                        current_total + remaining,
-                        deposit_min,
-                        min(deposit_max, max(deposit_min, 25_000)),
-                        deposit_max,
-                        rng,
-                        amount_mode,
-                    )
-                for event, amount in zip(deposit_events, updated_amounts):
-                    event.amount = float(amount)
-        else:
-            needed = abs(remaining)
-            deposit_events = _latest_events_by_type(plan, "deposit")
-            if deposit_events:
-                current_total = round_to_step(sum(event.amount for event in deposit_events))
-                minimum_total = len(deposit_events) * deposit_min
-                reducible = max(0, current_total - minimum_total)
-                reduction = min(needed, reducible)
-                if reduction > 0:
-                    updated_amounts = _rebalance_amounts_to_total(
-                        [int(round(event.amount)) for event in deposit_events],
-                        _bounded_total_target(current_total - reduction, len(deposit_events), deposit_min, deposit_max, amount_mode),
-                        deposit_min,
-                        deposit_max,
-                        rng,
-                        mode=amount_mode,
-                    )
-                    updated_amounts = _limit_duplicate_amounts(updated_amounts, deposit_min, deposit_max, rng, mode=amount_mode)
-                    if amount_mode == "automatic":
-                        updated_amounts = _normalize_hundred_only_ratio(
-                            updated_amounts,
-                            current_total - reduction,
-                            deposit_min,
-                            deposit_max,
-                            rng,
-                        )
-                        updated_amounts = _ensure_low_band_amount(
-                            updated_amounts,
-                            current_total - reduction,
-                            deposit_min,
-                            min(deposit_max, max(deposit_min, 25_000)),
-                            deposit_max,
-                            rng,
-                            amount_mode,
-                        )
-                    for event, amount in zip(deposit_events, updated_amounts):
-                        event.amount = float(amount)
-                    needed -= reduction
-            if needed > 0:
-                withdrawal_events = _latest_events_by_type(plan, "withdrawal")
-                if withdrawal_events:
-                    current_total = round_to_step(sum(event.amount for event in withdrawal_events))
-                    updated_amounts = _rebalance_amounts_to_total(
-                        [int(round(event.amount)) for event in withdrawal_events],
-                        _bounded_total_target(current_total + needed, len(withdrawal_events), withdrawal_min, withdrawal_max, amount_mode),
-                        withdrawal_min,
-                        withdrawal_max,
-                        rng,
-                        mode=amount_mode,
-                    )
-                    updated_amounts = _limit_duplicate_amounts(updated_amounts, withdrawal_min, withdrawal_max, rng, mode=amount_mode)
-                    if amount_mode == "automatic":
-                        updated_amounts = _normalize_hundred_only_ratio(
-                            updated_amounts,
-                            current_total + needed,
-                            withdrawal_min,
-                            withdrawal_max,
-                            rng,
-                        )
-                    for event, amount in zip(withdrawal_events, updated_amounts):
-                        event.amount = float(amount)
-
-    return rows, summary, final_balance, last_transaction_date
+    constraints = assign_rounding(plan, config, rng, amount_mix)
+    # Every transaction may need an adjustment, plus room for interest corrections.
+    for _ in range(len(plan) + 40):
+        result = simulate_statement(config, plan, opening_business_date, ending_business_date,
+                                    quarter_schedule, rng, enforce_max_rows=enforce_max_rows)
+        delta = round_money(config.target_closing_balance - result[2])
+        if abs(delta) <= 100 or not adjust_plan(plan, config, constraints, delta, ending_business_date, rng):
+            return result
+    return simulate_statement(config, plan, opening_business_date, ending_business_date,
+                              quarter_schedule, rng, enforce_max_rows=enforce_max_rows)
 
 
 def _manual_plan_from_rows(
@@ -2053,6 +1935,7 @@ def _generate_statement_result(
     seed_offset: int = 0,
 ) -> StatementResult:
     validate_config(config, require_growth=require_growth)
+    validate_amount_mix(config)
     seed = config.seed if config.seed is not None else random.SystemRandom().randint(10_000_000, 99_999_999)
     seed += seed_offset
     opening_business_date = resolve_business_day(config.start_date, config.holiday_dates)
@@ -2068,7 +1951,7 @@ def _generate_statement_result(
                 config.holiday_dates,
                 config.quarter_date_overrides,
             )
-            plan = _create_transaction_plan(config, opening_business_date, ending_business_date, quarter_schedule, rng)
+            plan, amount_mix = _create_transaction_plan(config, opening_business_date, ending_business_date, quarter_schedule, rng)
             rows, summary, final_balance, last_transaction_date = _reconcile_plan(
                 config,
                 plan,
@@ -2077,6 +1960,7 @@ def _generate_statement_result(
                 quarter_schedule,
                 rng,
                 enforce_max_rows=enforce_max_rows,
+                amount_mix=amount_mix,
             )
             if enforce_target_tolerance and abs(final_balance - config.target_closing_balance) > 3_000:
                 raise ValueError("Generated closing balance is still too far from the requested target.")

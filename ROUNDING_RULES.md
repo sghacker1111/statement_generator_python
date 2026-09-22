@@ -4,9 +4,18 @@ In **Statement Rules → Transaction Counts & Rounding**, select **Automatic (70
 
 ## Credit and debit counts
 
-Credit transactions exceed debit transactions by a randomly selected **5 to 10**. The same seed reproduces the same result. The requested total and customized monthly transaction counts remain unchanged.
+The debit transaction count is randomly selected between **45% and 70% of the credit transaction count**, inclusive. For example, 100 credits allow 45–70 debits. A requested total is split only among integer counts that satisfy this ratio; customized monthly totals remain unchanged. The same seed reproduces the same result within each implementation.
 
-A fixed total determines which differences are possible: an even total permits 6, 8, or 10; an odd total permits 5, 7, or 9. At least seven customer transactions are required so that both columns contain transactions. The opening/closing balance, interest, and tax rows are excluded from this count. Very short statements may need longer deposit runs to meet the count rule.
+At least **13 customer transactions** are required to satisfy all count and amount rules: the smallest valid mix is 8 credits and 5 debits. Opening/closing balance, interest, and tax rows are excluded from these percentages. A request that cannot fit the minimum reports an error.
+
+Debit ordering includes randomly positioned **single debits and consecutive pairs**. The existing maximum of two consecutive debits and up to three pairs is retained. Credit runs remain at most three transactions; their distribution adapts to the selected debit/credit ratio.
+
+## Amount groups
+
+- **10–20% of debit transactions** have amounts strictly **above 50,000**. Other debits are 50,000 or less.
+- **20–30% of credit transactions** have amounts strictly **below 30,000**. Other credits are 30,000 or more.
+
+These are percentages of each column's transaction count, not percentages of the money total. Integer quotas are selected randomly within each interval and assigned to random transactions. Amount limits must allow both groups in each column. Incompatible limits, rounding figures, or closing-balance targets report an error instead of silently relaxing a rule.
 
 ## Automatic rounding
 
@@ -28,10 +37,10 @@ Percentages are converted into whole transaction counts using the largest remain
 
 Settings are preserved in saved profiles and statement configurations. Existing profiles without percentages receive the custom defaults. Existing single-figure and mixed-figure modes remain available.
 
-Balance reconciliation preserves each assigned rounding class, the transaction counts, and amount limits. The existing closing-balance tolerance remains unchanged. If limits cannot accommodate a requested mix, generation reports an error; widen the limits or change the percentages. Interest and tax retain their existing calculation precision. Manual statement edits preserve the entered amounts rather than applying a new random distribution.
+Balance reconciliation preserves each assigned amount group and rounding class, the transaction counts, and amount limits in automatic, custom, and older saved rounding modes. The existing closing-balance tolerance remains unchanged. If limits cannot accommodate a requested mix, generation reports an error; widen the limits or change the percentages. Interest and tax retain their existing calculation precision. Manual statement edits preserve the entered amounts rather than applying a new random distribution. The manual Add Statement Before workflow can append an exact balance adjustment to join the preserved statement; that adjustment and manually entered rows are not governed by the automatic generation quotas.
 
 Holiday rules are unchanged: Saturdays are blocked, Sundays follow the existing effective-date rule, and other holidays are managed manually.
 
 ## Verification
 
-The backend self-tests check all credit-count differences, exact monthly counts, the final automatic/custom rounding distribution after reconciliation, limits, determinism, and invalid percentages. Run `node --test tests/*.test.cjs` for frontend behavior, including profile restoration, mode switching, and validation.
+The backend self-tests check the debit/credit ratio, exact monthly counts, high-debit and low-credit quotas, single/paired debit ordering, strict amount boundaries, final rounding distributions, limits, determinism, and invalid percentages. Run `node --test tests/*.test.cjs` for frontend behavior, including profile restoration, mode switching, and validation.

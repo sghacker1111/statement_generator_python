@@ -106,7 +106,8 @@
               <label class="field"><span>Maximum Withdraw Amount</span><input name="withdrawal_max_amount" type="number" min="1" step="100"></label>
               <div class="inset-panel field-span" id="rounding-rules-panel">
                 <div class="section-head compact-section-head"><h3>Transaction Counts &amp; Rounding</h3>
-                  <p>Credit transactions exceed debit transactions by a randomly selected 5 to 10. A fixed total limits the available odd/even differences. At least 7 transactions are required.</p>
+                  <p>Debit transactions are randomly selected at 45–70% of the credit count. At least 13 customer transactions are required.</p>
+                  <p>10–20% of debit transactions have amounts above 50,000; 20–30% of credit transactions have amounts below 30,000. Debit ordering includes random pairs and single transactions. Interest, tax, and balance rows are excluded.</p>
                 </div>
                 <label class="field"><span>Amount Rounding Type</span>
                   <select name="amount_rounding_mode" id="amount-rounding-mode"></select>
