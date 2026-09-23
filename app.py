@@ -63,7 +63,7 @@ from statement_generator.office_formats import convert_office, editable_office_c
 from statement_generator.document_layout import word_html
 from statement_generator.sample_documents import sample_html
 from statement_generator.letterheads import load_letterhead, save_letterhead
-from statement_generator.holidays import MANUAL_HOLIDAY_SEED_VERSION, SUNDAY_HOLIDAY_START, is_recurring_holiday, manual_holiday_dates  # noqa: E402
+from statement_generator.holidays import MANUAL_HOLIDAY_SEED_VERSION, SUNDAY_HOLIDAY_START, is_recurring_holiday, manual_holiday_dates, manual_holiday_additions  # noqa: E402
 from statement_generator.importers import import_xlsx_statement  # noqa: E402
 from statement_generator.selftest import run_tests  # noqa: E402
 from statement_generator.utils import format_amount, json_default, next_business_day, parse_iso_date, resolve_business_day, round_money, safe_filename  # noqa: E402
@@ -361,7 +361,7 @@ def load_persistent_rules(user_id: int | None = None) -> dict[str, object]:
     # Seed once so manual deletions survive later loads. Retain saved holidays
     # because older files cannot distinguish manual entries from previous syncs.
     if payload.get("holiday_seed_version") != MANUAL_HOLIDAY_SEED_VERSION:
-        custom_holidays.update(manual_holiday_dates())
+        custom_holidays.update(manual_holiday_additions(payload.get("holiday_seed_version", 0)))
     if schema_version < PERSISTENT_RULES_SCHEMA_VERSION or payload.get("holiday_seed_version") != MANUAL_HOLIDAY_SEED_VERSION or payload.get("excluded_saturdays"):
         save_persistent_rules(custom_holidays, excluded_saturdays, quarter_date_overrides, synced_quarter_dates, user_id=user_id)
     return {

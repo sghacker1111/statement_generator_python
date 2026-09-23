@@ -136,6 +136,6 @@ The optional files in `site_integration/` can add a button from another website 
 
 ## Manual holidays
 
-The supplied 243 dates are included in `data/manual_holidays.json`. Saturdays are always blocked, and Sundays remain blocked from April 5, 2026 under the existing rule. Add other holidays in **Holidays & Weekends**. See [HOLIDAY_RULES.md](HOLIDAY_RULES.md) for editing, account migration, and deployment details.
+The supplied 332 dates are included in `data/manual_holidays.json`. Saturdays are always blocked, and Sundays remain blocked from April 5, 2026 under the existing rule. Add other holidays in **Holidays & Weekends**. See [HOLIDAY_RULES.md](HOLIDAY_RULES.md) for editing, account migration, and deployment details.
 
 See [Office format editing, sample exports and A4 letterheads](OFFICE_FORMATS.md).

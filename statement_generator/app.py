@@ -23,7 +23,7 @@ from .exporters import (
 from .generator import StatementConfig, generate_statement, names_from_text
 from .selftest import run_tests
 from .rounding import CUSTOM_DEFAULTS, parse_percentages
-from .holidays import MANUAL_HOLIDAY_SEED_VERSION, SUNDAY_HOLIDAY_START, is_recurring_holiday, manual_holiday_dates
+from .holidays import MANUAL_HOLIDAY_SEED_VERSION, SUNDAY_HOLIDAY_START, is_recurring_holiday, manual_holiday_dates, manual_holiday_additions
 from .utils import format_amount, parse_iso_date, safe_filename
 
 
@@ -481,7 +481,7 @@ class StatementGeneratorApp(tk.Tk):
         self.excluded_saturday_dates = set()
 
         if payload.get("holiday_seed_version") != MANUAL_HOLIDAY_SEED_VERSION:
-            self.custom_holiday_dates.update(manual_holiday_dates())
+            self.custom_holiday_dates.update(manual_holiday_additions(payload.get("holiday_seed_version", 0)))
         if schema_version < PERSISTENT_RULES_SCHEMA_VERSION or payload.get("holiday_seed_version") != MANUAL_HOLIDAY_SEED_VERSION or payload.get("excluded_saturdays"):
             self._save_persistent_rules(show_error=False)
 
@@ -1057,7 +1057,7 @@ class StatementGeneratorApp(tk.Tk):
             self.custom_holiday_dates = set(self.default_holiday_dates)
         self.excluded_saturday_dates = set()
         if payload.get("holiday_seed_version") != MANUAL_HOLIDAY_SEED_VERSION:
-            self.custom_holiday_dates.update(manual_holiday_dates())
+            self.custom_holiday_dates.update(manual_holiday_additions(payload.get("holiday_seed_version", 0)))
         self.holiday_view_var.set("All")
         self._save_persistent_rules(show_error=False)
         self.refresh_holiday_display()

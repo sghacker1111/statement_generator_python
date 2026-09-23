@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Thread
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -47,7 +47,7 @@ class HolidayTests(unittest.TestCase):
         web.STATE_FILE.write_text(json.dumps({"schema_version": 5, "custom_holidays": ["2028-01-03"],
                                              "excluded_saturdays": ["2026-09-12"]}), encoding="utf-8")
         rules = web.load_persistent_rules(self.user.id)
-        self.assertEqual(len(manual_holiday_dates()), 243)
+        self.assertEqual(len(manual_holiday_dates()), 332)
         self.assertTrue(manual_holiday_dates() <= rules["custom_holidays"])
         self.assertIn("2023-08-26", rules["custom_holidays"])
         self.assertIn("2028-01-03", rules["custom_holidays"])
@@ -59,6 +59,45 @@ class HolidayTests(unittest.TestCase):
         self.assertIn("2028-01-04", rules["custom_holidays"])
         self.assertNotIn("2028-01-03", rules["custom_holidays"])
         self.assertNotIn("2028-01-04", web.load_persistent_rules(8)["custom_holidays"])
+
+    def test_existing_accounts_receive_only_the_new_holiday_update(self):
+        web.STATE_FILE.write_text(json.dumps({"schema_version": 5, "holiday_seed_version": 1,
+                                             "custom_holidays": ["2025-01-14", "2028-01-03"]}), encoding="utf-8")
+        rules = web.load_persistent_rules(self.user.id)
+        for value in ("2023-08-05", "2023-08-24", "2023-12-31", "2024-01-12", "2024-07-13", "2025-04-06", "2028-01-03"):
+            self.assertIn(value, rules["custom_holidays"])
+        self.assertNotIn("2025-10-23", rules["custom_holidays"])
+        holidays = {date.fromisoformat(value) for value in rules["custom_holidays"]}
+        for value in ("2023-08-24", "2023-12-31", "2024-01-12"):
+            self.assertFalse(is_business_day(date.fromisoformat(value), holidays))
+        self.action("delete", date="2023-08-24")
+        self.assertNotIn("2023-08-24", web.load_persistent_rules(self.user.id)["custom_holidays"])
+
+    def test_desktop_settings_and_profiles_migrate_without_restoring_deletions(self):
+        from .app import StatementGeneratorApp
+        path = self.root / "desktop.json"
+        payload = {"schema_version": 5, "holiday_seed_version": 1,
+                   "custom_holidays": ["2025-01-14", "2028-01-03"]}
+        desktop = SimpleNamespace(custom_holiday_dates=set(), excluded_saturday_dates=set(), vars={},
+                                  deposit_names_text=Mock(), withdrawal_names_text=Mock(),
+                                  holiday_view_var=Mock(), refresh_holiday_display=Mock(), append_log=Mock(),
+                                  _state_file_path=lambda: path)
+        for method in ("_clean_date_strings", "_save_persistent_rules"):
+            setattr(desktop, method, MethodType(getattr(StatementGeneratorApp, method), desktop))
+        for load_profile in (False, True):
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            if load_profile:
+                StatementGeneratorApp._apply_profile_payload(desktop, payload)
+            else:
+                StatementGeneratorApp._load_persistent_rules(desktop)
+            self.assertIn("2023-08-24", desktop.custom_holiday_dates)
+            self.assertIn("2028-01-03", desktop.custom_holiday_dates)
+            self.assertNotIn("2025-10-23", desktop.custom_holiday_dates)
+            self.assertIn("2023-08-24", json.loads(path.read_text(encoding="utf-8"))["custom_holidays"])
+            desktop.custom_holiday_dates.remove("2023-08-24")
+            desktop._save_persistent_rules(show_error=False)
+            StatementGeneratorApp._load_persistent_rules(desktop)
+            self.assertNotIn("2023-08-24", desktop.custom_holiday_dates)
 
     def test_admin_reset_restores_supplied_baseline(self):
         self.action("add", date="2028-01-03")

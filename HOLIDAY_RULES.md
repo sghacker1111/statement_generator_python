@@ -1,6 +1,6 @@
 # Manual holiday rules
 
-Both editions use the same supplied list in `data/manual_holidays.json`: 243 unique ISO Gregorian dates from the 245 table entries. The duplicate dates `2025-03-08` and `2026-02-07` appear once. The supplied `2023-08-26` is retained as written; no date years have been inferred or corrected.
+Both editions use the same supplied list in `data/manual_holidays.json`: **332 unique ISO Gregorian dates**. The September 2026 update adds 89 new dates from the user's additional 91-entry table. `2023-08-26` and `2025-04-06` were already present and appear only once. All years are retained exactly as supplied; in particular, `2025-04-06` has not been changed to 2024.
 
 - Every Saturday is blocked, including dates beyond the supplied list.
 - The existing Sunday rule is preserved: every Sunday from **2026-04-05** is blocked. Earlier Sundays are blocked only when present in the manual list.
@@ -11,12 +11,12 @@ Both editions use the same supplied list in `data/manual_holidays.json`: 243 uni
 
 ## Existing accounts
 
-On first use of the updated version, the supplied dates are merged into each account's existing manual holiday settings. The seed version is saved so later manual modifications and deletions survive reloads. Existing dates are retained because the old storage does not distinguish dates added manually from dates downloaded previously.
+New and legacy accounts receive the complete supplied list. Accounts already on seed version 1 receive only the dates in version 2 of `data/manual_holiday_updates.json`, preserving unrelated prior manual deletions and user-added holidays. The seed version is saved so later manual modifications and deletions survive reloads. This also applies to Python desktop settings and saved profiles.
 
 An administrator can use **Admin & History > Restore Dates > Holidays Only** to reset the selected user's holidays to the supplied list. Other holiday changes remain scoped to the signed-in account.
 
 ## Uploading the update
 
-Include the new `data/manual_holidays.json` with the updated application source. Keep live account state, database files, configuration, and uploaded templates in place. The PHP FTP workflow includes the new seed file and excludes saved holiday state.
+Include both `data/manual_holidays.json` and `data/manual_holiday_updates.json` with the updated application source. Keep live account state, database files, configuration, and uploaded templates in place. The PHP FTP workflow includes the new seed file and excludes saved holiday state.
 
 Both editions package the same holiday list so they can be deployed independently. The Python desktop application also uses this list and the recurring weekend rules.
