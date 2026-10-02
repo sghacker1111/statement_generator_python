@@ -301,6 +301,60 @@ function updateRoundingState() {
   updateRoundingPercentagesValue();
 }
 
+function loadTransactionRunRules(values = {}) {
+  for (const [side, limit] of [["debit", 3], ["credit", 4]]) {
+    const mode = document.getElementById(`${side}-run-mode`);
+    if (mode) mode.value = values[`${side}_run_mode`] ?? "automatic";
+    for (let length = 2; length <= limit; length++) {
+      const input = document.getElementById(`${side}-run-${length}`);
+      if (input) input.value = values[`${side}_run_${length}`] ?? "0";
+    }
+  }
+  updateTransactionRunState();
+}
+
+function updateTransactionRunState() {
+  let valid = true;
+  for (const [side, limit] of [["debit", 3], ["credit", 4]]) {
+    const mode = document.getElementById(`${side}-run-mode`)?.value || "automatic";
+    const automatic = mode === "automatic";
+    const percentage = mode === "percentage";
+    const panel = document.getElementById(`${side}-run-fields`);
+    if (panel) panel.hidden = automatic;
+    const inputs = [];
+    let total = 0;
+    let sideValid = ["automatic", "count", "percentage"].includes(mode);
+    for (let length = 2; length <= limit; length++) {
+      const input = document.getElementById(`${side}-run-${length}`);
+      if (!input) continue;
+      inputs.push(input);
+      input.disabled = automatic;
+      input.max = percentage ? "100" : "2000";
+      input.step = percentage ? "any" : "1";
+      const number = Number(input.value);
+      sideValid = sideValid && input.value.trim() !== "" && Number.isFinite(number) && number >= 0
+        && number <= Number(input.max) && (percentage || Number.isInteger(number));
+      total += number;
+    }
+    sideValid = automatic || (sideValid && (!percentage || total <= 100 + 1e-8));
+    const error = sideValid ? "" : percentage
+      ? `Enter ${side} percentages from 0 to 100 with a total of 100% or less.`
+      : `Enter whole numbers of ${side} groups from 0 to 2000.`;
+    for (const input of inputs) input.setCustomValidity(error);
+    for (const unit of document.querySelectorAll(`[data-run-unit="${side}"]`)) unit.textContent = percentage ? "(%)" : "(groups)";
+    const summary = document.getElementById(`${side}-run-summary`);
+    if (summary) {
+      summary.textContent = error || (automatic
+        ? `Automatic: mixed single and consecutive ${side} groups, up to ${limit} transactions, wherever the counts allow.`
+        : percentage ? `Grouped share: ${Number(total.toFixed(2))}%. Complete groups are rounded down; the remainder is singles.`
+          : "Exact group counts; remaining transactions are singles. Groups are placed randomly.");
+      summary.classList.toggle("error-text", !sideValid);
+    }
+    valid = valid && sideValid;
+  }
+  return valid;
+}
+
 function getFormValues() {
   updateRoundingPercentagesValue();
   updateMonthlyTransactionCountsValue();
@@ -319,6 +373,7 @@ function applyFormValues(values) {
     }
   }
   loadRoundingPercentages(values.amount_rounding_percentages);
+  loadTransactionRunRules(values);
   updateManualRateState();
   updateRowCountState();
   updatePrependStatementState();
@@ -794,7 +849,34 @@ function updatePreviewControls() {
   validateStatementButton.disabled = !hasStatement;
 }
 
+function renderTransactionRunSummary(rows) {
+  const node = document.getElementById("summary-transaction-runs");
+  if (!node) return;
+  const counts = { deposit: {}, withdrawal: {} };
+  let last = "";
+  let length = 0;
+  const finish = () => {
+    if (last) counts[last][length] = (counts[last][length] || 0) + 1;
+  };
+  for (const row of rows) {
+    if (row.is_system || !["deposit", "withdrawal"].includes(row.category)) continue;
+    if (row.category === last) length++;
+    else {
+      finish();
+      last = row.category;
+      length = 1;
+    }
+  }
+  finish();
+  node.textContent = last ? ["withdrawal", "deposit"].map((kind) => {
+    const groups = Object.entries(counts[kind]).map(([size, count]) =>
+      Number(size) === 1 ? `${count} singles` : `${count} groups of ${size}`);
+    return `${kind === "withdrawal" ? "Debit" : "Credit"}: ${groups.join(", ") || "none"}`;
+  }).join(" | ") + ". Customer transactions only." : "";
+}
+
 function renderPreviewRows(rows) {
+  renderTransactionRunSummary(rows);
   const includeCheque = shouldShowChequeColumn();
   const hasTwoDateColumns = statementDateColumnMode() === "txn_value";
   previewBody.innerHTML = "";
@@ -3401,6 +3483,9 @@ async function restoreSelectedUserDates() {
 }
 
 async function generateStatement() {
+  if (!updateTransactionRunState()) {
+    throw new Error("Correct the consecutive transaction counts or percentages before generating.");
+  }
   if (document.getElementById("amount-rounding-mode")?.value === "custom" && !updateRoundingPercentagesValue()) {
     throw new Error("Enter rounding percentages from 0 to 100 that total 100%.");
   }
@@ -4391,6 +4476,12 @@ function showAsyncError(error) {
 }
 
 function bindEvents() {
+  for (const control of document.querySelectorAll("[data-run-control]")) {
+    control.addEventListener("input", () => {
+      updateTransactionRunState();
+      scheduleAutoProfileSave();
+    });
+  }
   document.getElementById("amount-rounding-mode")?.addEventListener("change", updateRoundingState);
   for (const input of document.querySelectorAll("[data-rounding-step]")) {
     input.addEventListener("input", () => {

@@ -49,6 +49,7 @@ from statement_generator.exporters import (  # noqa: E402
     resolve_exchange_rate,
     scan_template_directory,
 )
+from statement_generator.transaction_runs import RUN_DEFAULTS, parse_run_rules
 from statement_generator.generator import (  # noqa: E402
     StatementConfig,
     generate_statement,
@@ -162,6 +163,7 @@ def profile_field_keys() -> list[str]:
         "deposit_max_amount",
         "withdrawal_min_amount",
         "withdrawal_max_amount",
+        *RUN_DEFAULTS,
         "amount_rounding_mode",
         "amount_rounding_percentages",
         "interest_rate",
@@ -214,6 +216,7 @@ def default_form_values() -> dict[str, str]:
         "deposit_max_amount": "99000",
         "withdrawal_min_amount": "15000",
         "withdrawal_max_amount": "65000",
+        **RUN_DEFAULTS,
         "amount_rounding_mode": "automatic",
         "amount_rounding_percentages": '{"1000":35,"500":35,"100":10,"50":10,"10":0,"5":10}',
         "interest_rate": "8",
@@ -2581,6 +2584,7 @@ def build_config(form_data: dict[str, object], forced_seed: int | None = None, u
         deposit_max_amount=_parse_amount_limit(text("deposit_max_amount"), 99_000),
         withdrawal_min_amount=_parse_amount_limit(text("withdrawal_min_amount"), 15_000),
         withdrawal_max_amount=_parse_amount_limit(text("withdrawal_max_amount"), 65_000),
+        **parse_run_rules(form_data),
         amount_rounding_mode=_normalize_amount_rounding_mode(text("amount_rounding_mode")),
         amount_rounding_percentages=(parse_percentages(form_data.get("amount_rounding_percentages", ""))
                                      if _normalize_amount_rounding_mode(text("amount_rounding_mode")) == "custom" else {}),

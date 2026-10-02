@@ -220,7 +220,8 @@ class RoundingTests(unittest.TestCase):
                         connection.close()
                 try:
                     form = {**app.default_form_values(), 'seed': '12345678', 'amount_rounding_mode': 'custom',
-                            'amount_rounding_percentages': '{"1000":60,"500":20,"5":20}'}
+                            'amount_rounding_percentages': '{"1000":60,"500":20,"5":20}',
+                            'debit_run_mode': 'percentage', 'debit_run_2': '20', 'debit_run_3': '30'}
                     status, result = request('/api/generate', form)
                     self.assertEqual(status, 200, result)
                     self.assertEqual(result['history']['total_statements'], 1)
@@ -236,6 +237,15 @@ class RoundingTests(unittest.TestCase):
                     self.assertEqual(status, 200)
                     _, profile = request('/api/profile')
                     self.assertEqual(profile['profile']['amount_rounding_percentages'], form['amount_rounding_percentages'])
+                    self.assertEqual(profile['profile']['debit_run_3'], '30')
+                    self.assertEqual(auth.statement_detail(user, result['statement_id'])['config']['debit_run_mode'], 'percentage')
+                    from .test_transaction_runs import run_counts
+                    kinds = [row.category for row in rows if row.category in {'deposit', 'withdrawal'}]
+                    self.assertEqual(run_counts(kinds)[('withdrawal', 3)], kinds.count('withdrawal') * 30 // 300)
+                    with patch.object(app.traceback, 'print_exc'):
+                        status, _ = request('/api/generate', {**form, 'debit_run_2': '90', 'debit_run_3': '30'})
+                    self.assertEqual(status, 400)
+                    self.assertEqual(auth.statement_history(user)['total_statements'], 1)
                 finally:
                     server.shutdown()
                     server.server_close()
@@ -250,7 +260,9 @@ class RoundingTests(unittest.TestCase):
                 return self.value
         config = self.config()
         values = {key: str(value) if value is not None else '' for key, value in asdict(config).items()}
-        values.update(deposit_mode='Label + Name', withdrawal_mode='Label + Name', amount_rounding_mode='custom')
+        values.update(deposit_mode='Label + Name', withdrawal_mode='Label + Name', amount_rounding_mode='custom',
+                      debit_run_mode='count', debit_run_2='3', debit_run_3='2',
+                      credit_run_mode='percentage', credit_run_2='20', credit_run_3='30', credit_run_4='40')
         values.update({f'rounding_{step}': str(percent) for step, percent in CUSTOM_DEFAULTS.items()})
         desktop = SimpleNamespace(vars={key: Value(value) for key, value in values.items()},
                                   deposit_names_text=Value('Self'), withdrawal_names_text=Value('Self'),
@@ -259,6 +271,8 @@ class RoundingTests(unittest.TestCase):
         actual = StatementGeneratorApp.collect_config(desktop)
         self.assertEqual(actual.amount_rounding_mode, 'custom')
         self.assertEqual(actual.amount_rounding_percentages, CUSTOM_DEFAULTS)
+        self.assertEqual((actual.debit_run_mode, actual.debit_run_2, actual.debit_run_3), ("count", 3, 2))
+        self.assertEqual((actual.credit_run_mode, actual.credit_run_4), ("percentage", 40))
         desktop.vars['rounding_1000'].value = '34'
         with self.assertRaises(ValueError):
             StatementGeneratorApp.collect_config(desktop)

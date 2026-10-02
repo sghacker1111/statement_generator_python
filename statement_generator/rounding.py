@@ -4,6 +4,8 @@ from collections import Counter
 import json
 import math
 
+from .transaction_runs import parse_run_rules, counts_fit_runs, FIT_ERROR
+
 STEPS = (1000, 500, 100, 50, 10, 5)
 CUSTOM_DEFAULTS = {1000: 35, 500: 35, 100: 10, 50: 10, 10: 0, 5: 10}
 
@@ -112,6 +114,10 @@ def prepare_mix(total, config, rng, debit_total=None):
     capacities = _capacities(counts, allowed)
     debit_options = ([debit_total] if debit_total is not None else
                      list(range(max(5, (45 * total + 144) // 145), 70 * total // 170 + 1)))
+    run_rules = parse_run_rules(config)
+    debit_options = [debits for debits in debit_options if counts_fit_runs(total - debits, debits, run_rules)]
+    if not debit_options:
+        raise ValueError(FIT_ERROR)
     rng.shuffle(debit_options)
     for debits in debit_options:
         credits = total - debits

@@ -107,7 +107,7 @@
               <div class="inset-panel field-span" id="rounding-rules-panel">
                 <div class="section-head compact-section-head"><h3>Transaction Counts &amp; Rounding</h3>
                   <p>Debit transactions are randomly selected at 45–70% of the credit count. At least 13 customer transactions are required.</p>
-                  <p>10–20% of debit transactions have amounts above 50,000; 20–30% of credit transactions have amounts below 30,000. Debit ordering includes random pairs and single transactions. Interest, tax, and balance rows are excluded.</p>
+                  <p>10–20% of debit transactions have amounts above 50,000; 20–30% of credit transactions have amounts below 30,000. Consecutive debit and credit groups are controlled below. Interest, tax, and balance rows are excluded.</p>
                 </div>
                 <label class="field"><span>Amount Rounding Type</span>
                   <select name="amount_rounding_mode" id="amount-rounding-mode"></select>
@@ -127,6 +127,44 @@
                   <p id="rounding-percentage-total" role="status" aria-live="polite">Total: 100%</p>
                   <p>Each amount is counted in its largest matching rounding figure, so categories do not overlap. Percentages are converted to the nearest whole transaction counts.</p>
                 </div>
+              </div>
+              <div class="inset-panel field-span" id="transaction-runs-panel">
+                <div class="section-head compact-section-head"><h3>Consecutive Transactions</h3>
+                  <p>Randomly place debit groups of 2 or 3 and credit groups of 2, 3, or 4 throughout the statement. Automatic also keeps single transactions.</p>
+                </div>
+                <div class="field-grid two-col">
+                  <div>
+                    <label class="field"><span>Debit Consecutive Transactions</span>
+                      <select name="debit_run_mode" id="debit-run-mode" data-run-control>
+                        <option value="automatic">Automatic</option>
+                        <option value="count">Number of groups</option>
+                        <option value="percentage">Percentage of debit transactions</option>
+                      </select>
+                    </label>
+                    <div id="debit-run-fields" hidden>
+                      <label class="field"><span>2 consecutive debits <span data-run-unit="debit">(groups)</span></span><input name="debit_run_2" id="debit-run-2" type="number" min="0" max="2000" step="1" value="0" data-run-control></label>
+                      <label class="field"><span>3 consecutive debits <span data-run-unit="debit">(groups)</span></span><input name="debit_run_3" id="debit-run-3" type="number" min="0" max="2000" step="1" value="0" data-run-control></label>
+                    </div>
+                    <p id="debit-run-summary" role="status" aria-live="polite"></p>
+                  </div>
+                  <div>
+                    <label class="field"><span>Credit Consecutive Transactions</span>
+                      <select name="credit_run_mode" id="credit-run-mode" data-run-control>
+                        <option value="automatic">Automatic</option>
+                        <option value="count">Number of groups</option>
+                        <option value="percentage">Percentage of credit transactions</option>
+                      </select>
+                    </label>
+                    <div id="credit-run-fields" hidden>
+                      <label class="field"><span>2 consecutive credits <span data-run-unit="credit">(groups)</span></span><input name="credit_run_2" id="credit-run-2" type="number" min="0" max="2000" step="1" value="0" data-run-control></label>
+                      <label class="field"><span>3 consecutive credits <span data-run-unit="credit">(groups)</span></span><input name="credit_run_3" id="credit-run-3" type="number" min="0" max="2000" step="1" value="0" data-run-control></label>
+                      <label class="field"><span>4 consecutive credits <span data-run-unit="credit">(groups)</span></span><input name="credit_run_4" id="credit-run-4" type="number" min="0" max="2000" step="1" value="0" data-run-control></label>
+                    </div>
+                    <p id="credit-run-summary" role="status" aria-live="polite"></p>
+                  </div>
+                </div>
+                <p>Number counts complete groups: 2 groups of 3 debits means 6 debit transactions. Percentage uses that side's transaction count: with 20 debits, 30% in groups of 3 gives 2 groups. Percentages total at most 100%, round down to complete groups, and leave remaining transactions as singles.</p>
+                <p>These settings control consecutive transaction types, not equal monetary amounts. Interest, tax, and balance rows are excluded when counting groups. If the two sides cannot fit together, adjust the settings or select Automatic.</p>
               </div>
               <label class="field"><span>Interest Rate (%)</span><input name="interest_rate" type="number" step="0.0001"></label>
               <label class="field"><span>Tax Rate (%)</span><input name="tax_rate" type="number" step="0.0001"></label>
@@ -752,6 +790,7 @@
             <article class="summary-card"><span>Tax</span><strong id="summary-total-tax">-</strong></article>
             <article class="summary-card"><span>Seed Used</span><strong id="summary-seed-used">-</strong></article>
           </div>
+          <p id="summary-transaction-runs" role="status" aria-live="polite"></p>
         </section>
 
         <section class="panel preview-panel">
@@ -880,6 +919,6 @@
     </div>
   </div>
 
-  <script type="module" src="./static/app.js?v=20260915-office"></script>
+  <script type="module" src="./static/app.js?v=20261002-runs"></script>
 </body>
 </html>

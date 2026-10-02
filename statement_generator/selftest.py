@@ -247,7 +247,7 @@ class GeneratorTests(unittest.TestCase):
             withdrawals = result.summary.withdrawal_count
             self.assertTrue(45 * deposits <= 100 * withdrawals <= 70 * deposits)
 
-    def test_consecutive_deposit_runs_stay_within_three(self) -> None:
+    def test_consecutive_deposit_runs_stay_within_four(self) -> None:
         for seed in (123450, 123451, 123452, 123453, 123454, 123455, 123456, 123457, 123458, 123459):
             config = self.build_config()
             config.seed = seed
@@ -265,10 +265,10 @@ class GeneratorTests(unittest.TestCase):
                     current_run = 0
             if current_run:
                 deposit_runs.append(current_run)
-            self.assertLessEqual(longest_run, 3)
+            self.assertLessEqual(longest_run, 4)
             self.assertTrue(any(run_length != 2 for run_length in deposit_runs))
 
-    def test_consecutive_withdrawal_runs_stay_within_two(self) -> None:
+    def test_consecutive_withdrawal_runs_stay_within_three(self) -> None:
         for seed in (123450, 123451, 123452, 123453, 123454, 123455, 123456, 123457, 123458, 123459):
             config = self.build_config()
             config.seed = seed
@@ -286,8 +286,9 @@ class GeneratorTests(unittest.TestCase):
                     current_run = 0
             if current_run:
                 withdrawal_runs.append(current_run)
-            self.assertLessEqual(longest_run, 2)
-            self.assertLessEqual(sum(1 for run_length in withdrawal_runs if run_length == 2), 3)
+            self.assertLessEqual(longest_run, 3)
+            self.assertIn(1, withdrawal_runs)
+            self.assertIn(2, withdrawal_runs)
 
     def test_deposit_run_lengths_vary_across_seed_sample(self) -> None:
         saw_single = False
@@ -332,8 +333,8 @@ class GeneratorTests(unittest.TestCase):
                 debit_runs = [length for kind, length in runs if kind == "withdrawal"]
                 self.assertIn(1, debit_runs)
                 self.assertIn(2, debit_runs)
-                self.assertLessEqual(max(debit_runs), 2)
-                self.assertLessEqual(max(length for kind, length in runs if kind == "deposit"), 3)
+                self.assertLessEqual(max(debit_runs), 3)
+                self.assertLessEqual(max(length for kind, length in runs if kind == "deposit"), 4)
             self.assertGreater(len(orders), 1)
 
     def test_opening_and_later_transaction_patterns_vary_with_fixed_counts(self) -> None:
@@ -354,11 +355,14 @@ class GeneratorTests(unittest.TestCase):
                 later.add(sequence[6:18])
                 self.assertEqual(sequence.count("C"), credits)
                 self.assertEqual(sequence.count("D"), debits)
-                self.assertTrue(all(length <= (3 if kind == "C" else 2) for kind, length in runs))
+                self.assertTrue(all(length <= (4 if kind == "C" else 3) for kind, length in runs))
                 debit_runs = [length for kind, length in runs if kind == "D"]
                 self.assertIn(1, debit_runs)
-                self.assertTrue(1 <= debit_runs.count(2) <= 3)
-            self.assertEqual(openings, {("C", 1), ("C", 2), ("C", 3), ("D", 1), ("D", 2)})
+                self.assertGreaterEqual(debit_runs.count(2), 1)
+            expected = {("C", 1), ("C", 2), ("C", 3), ("C", 4), ("D", 1), ("D", 2)}
+            if debits >= 6:
+                expected.add(("D", 3))
+            self.assertEqual(openings, expected)
             self.assertTrue(any(prefix.startswith("DCD") for prefix in prefixes))
             self.assertGreaterEqual(len(prefixes), 20)
             self.assertGreaterEqual(len(later), 20)
@@ -463,10 +467,12 @@ class GeneratorTests(unittest.TestCase):
 def run_tests() -> unittest.result.TestResult:
     from .test_holidays import HolidayTests
     from .test_rounding import RoundingTests
+    from .test_transaction_runs import TransactionRunTests
     suite = unittest.TestSuite([
         unittest.defaultTestLoader.loadTestsFromTestCase(GeneratorTests),
         unittest.defaultTestLoader.loadTestsFromTestCase(HolidayTests),
         unittest.defaultTestLoader.loadTestsFromTestCase(RoundingTests),
+        unittest.defaultTestLoader.loadTestsFromTestCase(TransactionRunTests),
     ])
     return unittest.TextTestRunner(verbosity=2).run(suite)
 

@@ -7,6 +7,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import random
 from typing import Literal
 
+from .transaction_runs import parse_run_rules, transaction_sequence
 from .rounding import parse_percentages, assign_rounding, adjust_plan, validate_amount_mix, prepare_mix
 
 from .utils import (
@@ -89,6 +90,13 @@ class StatementConfig:
     deposit_max_amount: int = DEPOSIT_MAX_AMOUNT
     withdrawal_min_amount: int = WITHDRAWAL_MIN_AMOUNT
     withdrawal_max_amount: int = WITHDRAWAL_MAX_AMOUNT
+    debit_run_mode: str = "automatic"
+    debit_run_2: float = 0
+    debit_run_3: float = 0
+    credit_run_mode: str = "automatic"
+    credit_run_2: float = 0
+    credit_run_3: float = 0
+    credit_run_4: float = 0
     amount_rounding_mode: str = "automatic"
     amount_rounding_percentages: dict[int, float] = field(default_factory=dict)
     date_column_mode: str = "single"
@@ -906,182 +914,12 @@ def _ratio_distance(actual: float, target: float) -> float:
     return abs(actual - target)
 
 
-def _resequence_transaction_types(planned: list[PlannedEvent], rng: random.Random) -> None:
-    deposit_total = sum(1 for event in planned if event.event_type == "deposit")
-    withdrawal_total = len(planned) - deposit_total
-    total_slots = len(planned)
-    if total_slots <= 1:
-        return
+def _resequence_transaction_types(planned: list[PlannedEvent], rng: random.Random, config=None) -> None:
+    credits = sum(event.event_type == "deposit" for event in planned)
+    sequence = transaction_sequence(credits, len(planned) - credits, rng, config)
+    for event, kind in zip(planned, sequence):
+        event.event_type = kind
 
-    layouts: list[dict[str, object]] = []
-    max_withdrawal_pairs = min(3, withdrawal_total // 2)
-    for withdrawal_pair_runs in range(1, max_withdrawal_pairs + 1):
-        withdrawal_runs = withdrawal_total - withdrawal_pair_runs
-        if withdrawal_runs <= 0:
-            continue
-        withdrawal_single_runs = withdrawal_runs - withdrawal_pair_runs
-        if withdrawal_single_runs < 1:
-            continue
-
-        for start_type, end_type in (
-            ("deposit", "deposit"),
-            ("deposit", "withdrawal"),
-            ("withdrawal", "deposit"),
-            ("withdrawal", "withdrawal"),
-        ):
-            deposit_runs = withdrawal_runs
-            if start_type == "deposit":
-                deposit_runs += 1
-            if end_type == "withdrawal":
-                deposit_runs -= 1
-            if deposit_runs <= 0:
-                continue
-
-            for deposit_triple_runs in range(0, min(deposit_total // 3, deposit_runs) + 1):
-                deposit_single_runs = (2 * deposit_runs) - deposit_total + deposit_triple_runs
-                deposit_double_runs = deposit_total - deposit_runs - (2 * deposit_triple_runs)
-                if deposit_single_runs < 0 or deposit_double_runs < 0:
-                    continue
-                if deposit_single_runs + deposit_double_runs + deposit_triple_runs != deposit_runs:
-                    continue
-                if deposit_triple_runs > 0 and deposit_runs < 2:
-                    continue
-                if deposit_single_runs == 0 and deposit_triple_runs == 0 and deposit_runs > 1:
-                    continue
-
-                weight = 1.0
-                if start_type == "deposit":
-                    weight *= 1.15
-                if end_type == "deposit":
-                    weight *= 1.08
-                if deposit_triple_runs == 1:
-                    weight *= 1.10
-                elif deposit_triple_runs == 2:
-                    weight *= 0.92
-                if deposit_single_runs > 0:
-                    weight *= 1.10
-                if withdrawal_pair_runs == 1:
-                    weight *= 1.10
-                elif withdrawal_pair_runs == 2:
-                    weight *= 1.02
-                elif withdrawal_pair_runs == 3:
-                    weight *= 0.90
-
-                layouts.append(
-                    {
-                        "start_type": start_type,
-                        "end_type": end_type,
-                        "deposit_runs": deposit_runs,
-                        "withdrawal_runs": withdrawal_runs,
-                        "deposit_single_runs": deposit_single_runs,
-                        "deposit_double_runs": deposit_double_runs,
-                        "deposit_triple_runs": deposit_triple_runs,
-                        "withdrawal_pair_runs": withdrawal_pair_runs,
-                        "withdrawal_single_runs": withdrawal_single_runs,
-                        "weight": weight,
-                    }
-                )
-
-    if not layouts:
-        raise ValueError("The transaction counts cannot fit both single and consecutive debit runs.")
-
-    scored_layouts: list[dict[str, object]] = []
-    for item in layouts:
-        deposit_single_event_ratio = int(item["deposit_single_runs"]) / max(1, deposit_total)
-        deposit_double_event_ratio = (2 * int(item["deposit_double_runs"])) / max(1, deposit_total)
-        deposit_triple_event_ratio = (3 * int(item["deposit_triple_runs"])) / max(1, deposit_total)
-        withdrawal_double_event_ratio = (2 * int(item["withdrawal_pair_runs"])) / max(1, withdrawal_total)
-
-        score = 0.0
-        score += _ratio_distance(deposit_single_event_ratio, 0.20) * 2.6
-        score += _ratio_distance(deposit_double_event_ratio, 0.60) * 3.0
-        score += _ratio_distance(deposit_triple_event_ratio, 0.20) * 2.6
-        score += _ratio_distance(withdrawal_double_event_ratio, 0.30) * 2.7
-
-        if int(item["deposit_single_runs"]) == 0:
-            score += 0.7
-        if int(item["deposit_triple_runs"]) == 0 and deposit_total >= 9:
-            score += 0.45
-        if int(item["withdrawal_pair_runs"]) == 0 and withdrawal_total >= 6:
-            score += 0.25
-
-        scored = dict(item)
-        scored["score"] = score
-        scored_layouts.append(scored)
-
-    # Choose the first two runs from all feasible patterns. Scoring the whole
-    # layout must not remove debit openings or push credit triples to the middle.
-    opening_options = {}
-    for item in scored_layouts:
-        credit_lengths = [length for length, key in ((1, "deposit_single_runs"),
-                          (2, "deposit_double_runs"), (3, "deposit_triple_runs")) if item[key]]
-        debit_lengths = [length for length, key in ((1, "withdrawal_single_runs"),
-                         (2, "withdrawal_pair_runs")) if item[key]]
-        first_lengths, second_lengths = ((credit_lengths, debit_lengths) if item["start_type"] == "deposit"
-                                         else (debit_lengths, credit_lengths))
-        for first in first_lengths:
-            for second in second_lengths:
-                opening_options.setdefault((item["start_type"], first, second), []).append(item)
-    opening = rng.choice(list(opening_options))
-    layouts = opening_options[opening]
-    chosen_layout = rng.choices(layouts,
-        weights=[float(item["weight"]) / (1.0 + float(item["score"])) for item in layouts], k=1)[0]
-    start_type = str(chosen_layout["start_type"])
-    end_type = str(chosen_layout["end_type"])
-    deposit_runs = int(chosen_layout["deposit_runs"])
-    withdrawal_runs = int(chosen_layout["withdrawal_runs"])
-    deposit_single_runs = int(chosen_layout["deposit_single_runs"])
-    deposit_double_runs = int(chosen_layout["deposit_double_runs"])
-    deposit_triple_runs = int(chosen_layout["deposit_triple_runs"])
-    withdrawal_pair_runs = int(chosen_layout["withdrawal_pair_runs"])
-    withdrawal_single_runs = int(chosen_layout["withdrawal_single_runs"])
-
-    run_types: list[EventType] = []
-    current_type: EventType = "deposit" if start_type == "deposit" else "withdrawal"
-    total_runs = deposit_runs + withdrawal_runs
-    for _ in range(total_runs):
-        run_types.append(current_type)
-        current_type = "withdrawal" if current_type == "deposit" else "deposit"
-    if run_types[-1] != end_type:
-        raise ValueError("Transaction run layout ended with an unexpected event type.")
-
-    deposit_run_positions = [index for index, item in enumerate(run_types) if item == "deposit"]
-    withdrawal_run_positions = [index for index, item in enumerate(run_types) if item == "withdrawal"]
-
-    if len(deposit_run_positions) != deposit_runs or len(withdrawal_run_positions) != withdrawal_runs:
-        raise ValueError("Transaction run counts do not match the selected layout.")
-
-    # Reserve the selected opening, then shuffle the remaining run lengths
-    # across the entire statement, including the final credit run.
-    remaining_lengths = {
-        "deposit": [1] * deposit_single_runs + [2] * deposit_double_runs + [3] * deposit_triple_runs,
-        "withdrawal": [1] * withdrawal_single_runs + [2] * withdrawal_pair_runs,
-    }
-    run_lengths = [opening[1], opening[2]]
-    for kind, length in zip(run_types[:2], run_lengths):
-        remaining_lengths[kind].remove(length)
-    for lengths in remaining_lengths.values():
-        rng.shuffle(lengths)
-    for kind in run_types[2:]:
-        run_lengths.append(remaining_lengths[kind].pop())
-
-    sequence: list[EventType] = []
-    for run_type, run_length in zip(run_types, run_lengths):
-        sequence.extend([run_type] * run_length)
-
-    if len(sequence) != total_slots:
-        raise ValueError("Transaction run expansion did not produce the expected number of events.")
-    if sequence.count("deposit") != deposit_total or sequence.count("withdrawal") != withdrawal_total:
-        raise ValueError("Transaction run expansion changed the deposit or withdrawal counts.")
-    if _max_run_length(sequence, "deposit") > 3:
-        raise ValueError("Transaction run expansion created a deposit streak longer than three.")
-    if _max_run_length(sequence, "withdrawal") > 2:
-        raise ValueError("Transaction run expansion created a withdrawal streak longer than two.")
-    if _count_runs(sequence, "withdrawal", 2) > 3:
-        raise ValueError("Transaction run expansion created too many double-withdrawal runs.")
-
-    for event, new_type in zip(planned, sequence):
-        event.event_type = new_type
 
 
 def _plan_transaction_counts(
@@ -1177,7 +1015,7 @@ def _create_transaction_plan(
             planned.append(PlannedEvent("deposit", chosen, 0.0))
 
     planned.sort(key=lambda item: (item.date, 0 if item.event_type == "withdrawal" else 1))
-    _resequence_transaction_types(planned, rng)
+    _resequence_transaction_types(planned, rng, config)
 
     deposits = [event for event in planned if event.event_type == "deposit"]
     withdrawals = [event for event in planned if event.event_type == "withdrawal"]
@@ -1602,6 +1440,7 @@ def _manual_cheque_start(plan: list[PlannedEvent], fallback: int) -> int:
 
 
 def validate_config(config: StatementConfig, require_growth: bool = True) -> None:
+    parse_run_rules(config)
     if not config.customer_name.strip():
         raise ValueError("Customer name is required.")
     if config.start_date >= config.end_date:

@@ -20,6 +20,7 @@ from .exporters import (
     resolve_exchange_rate,
     scan_template_directory,
 )
+from .transaction_runs import RUN_DEFAULTS, RUN_LIMITS, parse_run_rules
 from .generator import StatementConfig, generate_statement, names_from_text
 from .selftest import run_tests
 from .rounding import CUSTOM_DEFAULTS, parse_percentages
@@ -89,6 +90,7 @@ class StatementGeneratorApp(tk.Tk):
             "first_date_description": "Opening Balance",
             "last_date_description": "Balance C/F",
             "seed": "",
+            **RUN_DEFAULTS,
             "amount_rounding_mode": "automatic",
             **{f"rounding_{step}": str(value) for step, value in CUSTOM_DEFAULTS.items()},
             "deposit_text": "Cash Deposit",
@@ -214,7 +216,7 @@ class StatementGeneratorApp(tk.Tk):
 
         rounding = ttk.LabelFrame(parent, text="Transaction Counts & Rounding", padding=8)
         rounding.grid(row=len(labels), column=0, columnspan=2, sticky="ew", pady=8)
-        ttk.Label(rounding, text="Debit count: 45–70% of credits; at least 13 customer transactions.\n10–20% of debits above 50,000; 20–30% of credits below 30,000.\nRandom single and paired debits. Interest, tax, and balance rows excluded.").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(rounding, text="Debit count: 45–70% of credits; at least 13 customer transactions.\n10–20% of debits above 50,000; 20–30% of credits below 30,000.\nRandom debit groups of 1–3 and credit groups of 1–4. Interest, tax, and balance rows excluded.").grid(row=0, column=0, columnspan=2, sticky="w")
         ttk.Label(rounding, text="Rounding type").grid(row=1, column=0, sticky="w")
         selector = ttk.Combobox(rounding, textvariable=self.vars["amount_rounding_mode"],
                                values=["automatic", "custom", "round_1000", "round_500", "round_100", "round_50", "round_10", "round_5"], state="readonly")
@@ -233,6 +235,28 @@ class StatementGeneratorApp(tk.Tk):
         self.vars["amount_rounding_mode"].trace_add("write", update_rounding)
         update_rounding()
 
+        runs = ttk.LabelFrame(parent, text="Consecutive Transactions", padding=8)
+        runs.grid(row=len(labels) + 1, column=0, columnspan=2, sticky="ew", pady=8)
+        for column, (side, limit) in enumerate(RUN_LIMITS.items()):
+            frame = ttk.LabelFrame(runs, text=side.title(), padding=6)
+            frame.grid(row=0, column=column, sticky="nsew", padx=4)
+            selector = ttk.Combobox(frame, textvariable=self.vars[f"{side}_run_mode"],
+                                   values=["automatic", "count", "percentage"], state="readonly")
+            selector.grid(row=0, column=0, columnspan=2, sticky="ew")
+            entries = []
+            for row, length in enumerate(range(2, limit + 1), 1):
+                ttk.Label(frame, text=f"Groups of {length}").grid(row=row, column=0, sticky="w")
+                entry = ttk.Entry(frame, textvariable=self.vars[f"{side}_run_{length}"], width=10)
+                entry.grid(row=row, column=1, sticky="ew")
+                entries.append(entry)
+            def update_runs(*_args, side=side, entries=entries):
+                for entry in entries:
+                    entry.configure(state="disabled" if self.vars[f"{side}_run_mode"].get() == "automatic" else "normal")
+            self.vars[f"{side}_run_mode"].trace_add("write", update_runs)
+            update_runs()
+        ttk.Label(runs, text="Count = number of groups. Percentage = share of that side's transactions.\nPercentages total at most 100%; round down to complete groups, with remaining transactions as singles.\nGroups are randomly placed throughout customer transactions; interest/tax rows are excluded.",
+                  justify="left").grid(row=1, column=0, columnspan=2, sticky="w")
+
         note = (
             "Generation rules used here:\n"
             "- deposit amounts stay random instead of increasing from top to bottom\n"
@@ -242,7 +266,7 @@ class StatementGeneratorApp(tk.Tk):
             "- blocked dates come from the Holiday & Weekend manager"
         )
         ttk.Label(parent, text=note, justify="left", foreground="#374151").grid(
-            row=len(labels) + 1,
+            row=len(labels) + 2,
             column=0,
             columnspan=2,
             sticky="w",
@@ -814,6 +838,7 @@ class StatementGeneratorApp(tk.Tk):
             tax_rate=float(self.vars["tax_rate"].get()),
             cheque_start=int(self.vars["cheque_start"].get()),
             include_cheque_column=True,
+            **parse_run_rules({key: self.vars[key].get() for key in RUN_DEFAULTS}),
             amount_rounding_mode=self.vars["amount_rounding_mode"].get(),
             amount_rounding_percentages=(parse_percentages({step: self.vars[f"rounding_{step}"].get() for step in CUSTOM_DEFAULTS})
                                          if self.vars["amount_rounding_mode"].get() == "custom" else {}),
