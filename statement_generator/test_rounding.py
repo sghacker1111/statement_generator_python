@@ -36,6 +36,8 @@ class RoundingTests(unittest.TestCase):
     def assert_transaction_mix(self, result):
         credits = [row.credit for row in result.rows if row.category == "deposit"]
         debits = [row.debit for row in result.rows if row.category == "withdrawal"]
+        self.assertLessEqual(max(Counter(credits).values()), 2)
+        self.assertLessEqual(max(Counter(debits).values()), 2)
         self.assertTrue(45 * len(credits) <= 100 * len(debits) <= 70 * len(credits))
         high = sum(value > 50000 for value in debits)
         low = sum(value < 30000 for value in credits)
@@ -138,7 +140,7 @@ class RoundingTests(unittest.TestCase):
         config.monthly_transaction_counts = {(2026, 1): 13}
         config.interest_rate = 0
         config.target_closing_balance = config.opening_balance + 80000
-        config.deposit_min_amount, config.deposit_max_amount = 29995, 30005
+        config.deposit_min_amount, config.deposit_max_amount = 29975, 30055
         config.withdrawal_min_amount, config.withdrawal_max_amount = 14995, 50005
         result = generate_statement(config)
         self.assertEqual(len(result.events), 13)
@@ -156,27 +158,62 @@ class RoundingTests(unittest.TestCase):
         config = self.config()
         config.start_date, config.end_date = date(2026, 1, 1), date(2026, 12, 31)
         config.interest_rate = 0
-        config.target_closing_balance = config.opening_balance + 100000
+        config.target_closing_balance = config.opening_balance + 2500000
         # Start far above the target: more than 40 individual amounts must move.
         plan = [PlannedEvent("deposit", date(2026, 2, 2), 90000) for _ in range(160)]
         plan += [PlannedEvent("withdrawal", date(2026, 2, 3), 15000) for _ in range(90)]
         rows, summary, balance, _ = _reconcile_plan(config, plan, config.start_date,
                                                    config.end_date, [], random.Random(1))
         self.assertLessEqual(abs(balance - config.target_closing_balance), 3000)
+        for kind in ("deposit", "withdrawal"):
+            self.assertLessEqual(max(Counter(e.amount for e in plan if e.event_type == kind).values()), 2)
         self.assertTrue(10 * 90 <= 100 * sum(event.amount > 50000 for event in plan if event.event_type == "withdrawal") <= 20 * 90)
         self.assertTrue(20 * 160 <= 100 * sum(event.amount < 30000 for event in plan if event.event_type == "deposit") <= 30 * 160)
 
     def test_narrow_limits_allocate_feasible_amount_groups_without_retries(self):
-        config = self.config("custom", {1000: 88, 5: 12})
-        config.deposit_min_amount, config.deposit_max_amount = 29995, 30005
+        config = self.config("custom", {1000: 60, 5: 40})
+        config.deposit_min_amount, config.deposit_max_amount = 27500, 35000
+        config.withdrawal_min_amount, config.withdrawal_max_amount = 48000, 52000
         for seed in range(5):
-            mix = prepare_mix(500, config, random.Random(seed))
-            self.assertTrue(200 <= sum(mix["demands"][2:]) <= 205)
-            plan = [PlannedEvent("deposit", date(2026, 2, 2), 30000) for _ in range(295)]
-            plan += [PlannedEvent("withdrawal", date(2026, 2, 3), 25000) for _ in range(205)]
-            assign_rounding(plan, config, random.Random(seed))
-            self.assertEqual(Counter(amount_class(int(event.amount)) for event in plan), {1000: 440, 5: 60})
-            self.assertIn(sum(event.amount < 30000 for event in plan[:295]), (59, 60))
+            mix = prepare_mix(40, config, random.Random(seed))
+            credits, debits = sum(mix["demands"][:2]), sum(mix["demands"][2:])
+            plan = [PlannedEvent("deposit", date(2026, 2, 2), 30000) for _ in range(credits)]
+            plan += [PlannedEvent("withdrawal", date(2026, 2, 3), 50000) for _ in range(debits)]
+            assign_rounding(plan, config, random.Random(seed), mix)
+            self.assertEqual(Counter(amount_class(int(event.amount)) for event in plan), {1000: 24, 5: 16})
+            for kind in ("deposit", "withdrawal"):
+                self.assertLessEqual(max(Counter(e.amount for e in plan if e.event_type == kind).values()), 2)
+        config.deposit_min_amount, config.deposit_max_amount = 29995, 30005
+        with self.assertRaisesRegex(ValueError, "at most two occurrences"):
+            prepare_mix(500, config, random.Random(1))
+
+    def test_high_credits_vary_below_maximum_and_repeats_stay_capped(self):
+        config = self.config()
+        config.deposit_max_amount = 98000
+        near_maximum = set()
+        for seed in range(123456, 123462):
+            config.seed = seed
+            result = generate_statement(config)
+            self.assert_transaction_mix(result)
+            credits = [e.amount for e in result.events if e.event_type == "deposit"]
+            self.assertLessEqual(credits.count(98000), 1)
+            near_maximum.update(amount for amount in credits if 88000 <= amount <= 93000)
+            self.assertLessEqual(abs(result.final_balance - config.target_closing_balance), 3000)
+        # A statement that reaches its target with lower credits must not be
+        # forced to contain a large amount. When needed, the upper band varies.
+        self.assertGreaterEqual(len(near_maximum), 4)
+
+    def test_assignment_does_not_pin_high_credits_to_the_ceiling(self):
+        config = self.config("custom", {1000: 100})
+        config.deposit_max_amount = 98000
+        plan = [PlannedEvent("deposit", date(2026, 2, 2), 98000) for _ in range(24)]
+        plan += [PlannedEvent("withdrawal", date(2026, 2, 3), 50000) for _ in range(15)]
+        assign_rounding(plan, config, random.Random(8))
+        credits = [e.amount for e in plan if e.event_type == "deposit"]
+        for kind in ("deposit", "withdrawal"):
+            self.assertLessEqual(max(Counter(e.amount for e in plan if e.event_type == kind).values()), 2)
+        self.assertLessEqual(credits.count(98000), 1)
+        self.assertGreaterEqual(len(set(a for a in credits if 88000 <= a <= 93000)), 5)
 
     def test_web_config_preserves_custom_percentage_field(self):
         import app

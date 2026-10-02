@@ -345,9 +345,9 @@ function updateTransactionRunState() {
     const summary = document.getElementById(`${side}-run-summary`);
     if (summary) {
       summary.textContent = error || (automatic
-        ? `Automatic: mixed single and consecutive ${side} groups, up to ${limit} transactions, wherever the counts allow.`
-        : percentage ? `Grouped share: ${Number(total.toFixed(2))}%. Complete groups are rounded down; the remainder is singles.`
-          : "Exact group counts; remaining transactions are singles. Groups are placed randomly.");
+        ? `Automatic: customer ${side} groups of up to ${limit}. Interest and tax excluded.`
+        : percentage ? `Grouped share: ${Number(total.toFixed(2))}%. Customer transactions only; interest and tax excluded. Complete groups round down; the remainder is singles.`
+          : "Exact customer group counts; interest and tax excluded. Remaining transactions are singles. Groups are placed randomly.");
       summary.classList.toggle("error-text", !sideValid);
     }
     valid = valid && sideValid;
@@ -869,10 +869,15 @@ function renderTransactionRunSummary(rows) {
   }
   finish();
   node.textContent = last ? ["withdrawal", "deposit"].map((kind) => {
-    const groups = Object.entries(counts[kind]).map(([size, count]) =>
-      Number(size) === 1 ? `${count} singles` : `${count} groups of ${size}`);
-    return `${kind === "withdrawal" ? "Debit" : "Credit"}: ${groups.join(", ") || "none"}`;
-  }).join(" | ") + ". Customer transactions only." : "";
+    const total = Object.entries(counts[kind]).reduce((sum, [size, count]) => sum + Number(size) * count, 0);
+    const groups = Object.entries(counts[kind]).map(([size, count]) => {
+      const percentage = Number((100 * Number(size) * count / total).toFixed(2));
+      const label = Number(size) === 1 ? `${count} single${count === 1 ? "" : "s"}`
+        : `${count} group${count === 1 ? "" : "s"} of ${size}`;
+      return `${label} (${percentage}%)`;
+    });
+    return `${kind === "withdrawal" ? "Debit" : "Credit"}: ${total} customer transactions — ${groups.join(", ") || "none"}`;
+  }).join(" | ") + ". Interest and tax are excluded from all counts and percentages." : "";
 }
 
 function renderPreviewRows(rows) {

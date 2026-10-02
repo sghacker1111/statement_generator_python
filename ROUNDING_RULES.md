@@ -12,7 +12,7 @@ Consecutive customer transactions can be configured separately for debits and cr
 
 For each side, choose **Automatic**, **Number of groups**, or **Percentage of transactions**. Number specifies exact complete groups (two groups of three debits use six debit transactions). Percentage uses that side's customer transaction count: `groups = floor(transaction_count * percentage / (100 * group_size))`. For example, 30% of 20 debits in groups of three produces two groups. Percentages for one side must total at most 100%; fractions of groups round down and remaining transactions become singles. Zero manual values mean no groups of that size. Settings are saved with the profile and restored when it is loaded; older profiles default to Automatic.
 
-Groups are randomly placed at the beginning, middle, and end, with debit and credit groups alternating so separate groups cannot accidentally merge. Group totals must allow the number of debit and credit groups to differ by at most one. The generator chooses transaction counts that satisfy both these settings and the existing debit/credit and amount rules; incompatible requests receive an error instead of silently changing the manual values. Small statements may not fit all automatic group sizes. Interest, tax, and opening/closing balance rows are excluded from these customer-transaction groups. The preview summary reports the actual groups after generation or editing.
+Groups are randomly placed at the beginning, middle, and end, with debit and credit groups alternating so separate groups cannot accidentally merge. Group totals must allow the number of debit and credit groups to differ by at most one. The generator chooses transaction counts that satisfy both these settings and the existing debit/credit and amount rules; incompatible requests receive an error instead of silently changing the manual values. Small statements may not fit all automatic group sizes. Interest, tax, and opening/closing balance rows are excluded from these customer-transaction groups. The preview summary reports the actual customer-only debit and credit totals, group counts, and percentages after generation or editing. Interest and tax never enter the numerator or denominator and do not split customer groups.
 
 These settings control consecutive debit/credit types, not repeated monetary amounts. Amount rounding, amount ranges, debit/credit ratios, monthly totals, and holiday rules remain unchanged. Leave the optional seed blank for a fresh statement; using the same seed intentionally reproduces the same statement. Different statements can occasionally share a short opening pattern.
 
@@ -22,6 +22,14 @@ These settings control consecutive debit/credit types, not repeated monetary amo
 - **20–30% of credit transactions** have amounts strictly **below 30,000**. Other credits are 30,000 or more.
 
 These are percentages of each column's transaction count, not percentages of the money total. Integer quotas are selected randomly within each interval and assigned to random transactions. Amount limits must allow both groups in each column. Incompatible limits, rounding figures, or closing-balance targets report an error instead of silently relaxing a rule.
+
+## Repeated amounts and large credits
+
+Automatically generated statements allow **at most two occurrences of the same amount in debits and at most two in credits**, counted independently. Interest, tax, and balance rows are excluded. The exact configured credit maximum appears **at most once**. These limits apply both to the initial amounts and every closing-balance adjustment.
+
+For large credits, the generator prefers varied values **5,000–10,000 below the configured maximum**, subject to the required balance, rounding class, and amount limits. With a maximum of 98,000, this favors amounts around 88,000–93,000 rather than repeatedly choosing 98,000. Smaller credits still follow the existing low-credit quota. It does not force a large credit when smaller amounts already reach the target. Values nearer the maximum remain available when needed to reach the balance.
+
+Before assigning amounts, the generator checks how many distinct compatible amounts each range and rounding group can supply. Ranges that cannot satisfy the repetition cap produce an actionable error; the user can widen limits, reduce transaction counts, or adjust the rounding mix. Targets incompatible with these rules also report an error instead of repeating capped amounts.
 
 ## Automatic rounding
 
@@ -49,4 +57,4 @@ Holiday rules are unchanged: Saturdays are blocked, Sundays follow the existing 
 
 ## Verification
 
-The backend self-tests check the debit/credit ratio, exact monthly counts, high-debit and low-credit quotas, single/paired debit ordering, strict amount boundaries, final rounding distributions, limits, determinism, and invalid percentages. Run `node --test tests/*.test.cjs` for frontend behavior, including profile restoration, mode switching, and validation.
+The backend self-tests check the debit/credit ratio, exact monthly counts, high-debit and low-credit quotas, consecutive debit/credit grouping excluding interest and tax, strict amount boundaries, two-occurrence limits, large-credit variety, final rounding distributions, limits, determinism, and invalid percentages. Run `node --test tests/*.test.cjs` for frontend behavior, including profile restoration, mode switching, and validation.

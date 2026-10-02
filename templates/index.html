@@ -107,7 +107,7 @@
               <div class="inset-panel field-span" id="rounding-rules-panel">
                 <div class="section-head compact-section-head"><h3>Transaction Counts &amp; Rounding</h3>
                   <p>Debit transactions are randomly selected at 45–70% of the credit count. At least 13 customer transactions are required.</p>
-                  <p>10–20% of debit transactions have amounts above 50,000; 20–30% of credit transactions have amounts below 30,000. Consecutive debit and credit groups are controlled below. Interest, tax, and balance rows are excluded.</p>
+                  <p>10–20% of debit transactions have amounts above 50,000; 20–30% of credit transactions have amounts below 30,000. Each amount occurs at most twice in debits and at most twice in credits. The exact credit maximum occurs at most once; large credits prefer varied amounts 5,000–10,000 below it when the balance and rounding rules allow. Consecutive groups are controlled below. Interest, tax, and balance rows are excluded.</p>
                 </div>
                 <label class="field"><span>Amount Rounding Type</span>
                   <select name="amount_rounding_mode" id="amount-rounding-mode"></select>
@@ -130,7 +130,7 @@
               </div>
               <div class="inset-panel field-span" id="transaction-runs-panel">
                 <div class="section-head compact-section-head"><h3>Consecutive Transactions</h3>
-                  <p>Randomly place debit groups of 2 or 3 and credit groups of 2, 3, or 4 throughout the statement. Automatic also keeps single transactions.</p>
+                  <p>Counts and percentages use only customer debit and credit transactions, excluding interest and tax. Debit groups of 2 or 3 and credit groups of 2, 3, or 4 are placed randomly; Automatic also keeps singles.</p>
                 </div>
                 <div class="field-grid two-col">
                   <div>
@@ -919,6 +919,6 @@
     </div>
   </div>
 
-  <script type="module" src="./static/app.js?v=20261002-runs"></script>
+  <script type="module" src="./static/app.js?v=20261002-amounts"></script>
 </body>
 </html>

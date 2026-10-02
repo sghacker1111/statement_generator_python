@@ -216,7 +216,7 @@ class StatementGeneratorApp(tk.Tk):
 
         rounding = ttk.LabelFrame(parent, text="Transaction Counts & Rounding", padding=8)
         rounding.grid(row=len(labels), column=0, columnspan=2, sticky="ew", pady=8)
-        ttk.Label(rounding, text="Debit count: 45–70% of credits; at least 13 customer transactions.\n10–20% of debits above 50,000; 20–30% of credits below 30,000.\nRandom debit groups of 1–3 and credit groups of 1–4. Interest, tax, and balance rows excluded.").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(rounding, text="Debit count: 45–70% of credits; at least 13 customer transactions.\n10–20% of debits above 50,000; 20–30% of credits below 30,000.\nRandom debit groups of 1–3 and credit groups of 1–4. Interest, tax, and balance rows excluded.\nSame amount at most twice per side; exact credit maximum at most once.\nLarge credits prefer varied amounts 5,000–10,000 below the maximum when feasible.").grid(row=0, column=0, columnspan=2, sticky="w")
         ttk.Label(rounding, text="Rounding type").grid(row=1, column=0, sticky="w")
         selector = ttk.Combobox(rounding, textvariable=self.vars["amount_rounding_mode"],
                                values=["automatic", "custom", "round_1000", "round_500", "round_100", "round_50", "round_10", "round_5"], state="readonly")
@@ -254,7 +254,7 @@ class StatementGeneratorApp(tk.Tk):
                     entry.configure(state="disabled" if self.vars[f"{side}_run_mode"].get() == "automatic" else "normal")
             self.vars[f"{side}_run_mode"].trace_add("write", update_runs)
             update_runs()
-        ttk.Label(runs, text="Count = number of groups. Percentage = share of that side's transactions.\nPercentages total at most 100%; round down to complete groups, with remaining transactions as singles.\nGroups are randomly placed throughout customer transactions; interest/tax rows are excluded.",
+        ttk.Label(runs, text="Count = number of groups. Percentage = share of customer transactions only (excluding interest and tax).\nPercentages total at most 100%; round down to complete groups, with remaining transactions as singles.\nGroups are randomly placed throughout customer transactions; interest/tax rows are excluded.",
                   justify="left").grid(row=1, column=0, columnspan=2, sticky="w")
 
         note = (

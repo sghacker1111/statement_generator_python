@@ -71,13 +71,14 @@ for (const root of roots) {
     const { ctx, element } = fixture(root);
     const rows = [
       { category: 'withdrawal' }, { category: 'withdrawal' },
-      { category: 'interest', is_system: true }, { category: 'tax', is_system: true },
+      { category: 'interest', credit: 98000, is_system: false }, { category: 'tax', debit: 98000, is_system: false },
+      { category: 'deposit', credit: 98000, is_system: true },
       { category: 'withdrawal' }, ...Array.from({ length: 4 }, () => ({ category: 'deposit' })),
       { category: 'withdrawal' }, { category: 'deposit' },
     ];
     ctx.renderTransactionRunSummary(rows);
     assert.equal(element('summary-transaction-runs').textContent,
-      'Debit: 1 singles, 1 groups of 3 | Credit: 1 singles, 1 groups of 4. Customer transactions only.');
+      'Debit: 4 customer transactions — 1 single (25%), 1 group of 3 (75%) | Credit: 5 customer transactions — 1 single (20%), 1 group of 4 (80%). Interest and tax are excluded from all counts and percentages.');
     ctx.renderTransactionRunSummary([]);
     assert.equal(element('summary-transaction-runs').textContent, '');
   });

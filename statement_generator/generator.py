@@ -915,9 +915,10 @@ def _ratio_distance(actual: float, target: float) -> float:
 
 
 def _resequence_transaction_types(planned: list[PlannedEvent], rng: random.Random, config=None) -> None:
-    credits = sum(event.event_type == "deposit" for event in planned)
-    sequence = transaction_sequence(credits, len(planned) - credits, rng, config)
-    for event, kind in zip(planned, sequence):
+    customer_events = [event for event in planned if event.event_type in {"deposit", "withdrawal"}]
+    credits = sum(event.event_type == "deposit" for event in customer_events)
+    sequence = transaction_sequence(credits, len(customer_events) - credits, rng, config)
+    for event, kind in zip(customer_events, sequence):
         event.event_type = kind
 
 
@@ -1777,7 +1778,7 @@ def _generate_statement_result(
                 amount_mix=amount_mix,
             )
             if enforce_target_tolerance and abs(final_balance - config.target_closing_balance) > 3_000:
-                raise ValueError("Generated closing balance is still too far from the requested target.")
+                raise ValueError("Unable to reach the requested closing balance with the amount limits, rounding mix, and two-occurrence limit. Adjust the target, amount limits, or transaction count.")
             issue_date = next_business_day(last_transaction_date, config.holiday_dates, include_self=False)
             return StatementResult(
                 rows=rows,

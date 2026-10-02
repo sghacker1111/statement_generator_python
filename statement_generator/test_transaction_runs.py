@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from . import selftest
-from .generator import generate_statement
+from .generator import generate_statement, PlannedEvent, _resequence_transaction_types
 from .rounding import prepare_mix
 from .transaction_runs import RUN_DEFAULTS, parse_run_rules, transaction_sequence
 
@@ -46,6 +46,21 @@ class TransactionRunTests(unittest.TestCase):
         self.assertGreater(len(orders), 140)
         self.assertEqual(transaction_sequence(30, 18, random.Random(7), COUNT_RULES),
                          transaction_sequence(30, 18, random.Random(7), COUNT_RULES))
+
+    def test_interest_and_tax_never_enter_group_counts_or_percentages(self):
+        for rules in (COUNT_RULES, PERCENT_RULES):
+            base = [PlannedEvent(kind, date(2026, 1, 1), 30000) for kind in
+                    ["deposit"] * 30 + ["withdrawal"] * 18]
+            mixed = []
+            for event in base:
+                mixed.extend([PlannedEvent("interest", event.date, 98000), event,
+                              PlannedEvent("tax", event.date, 98000)])
+            _resequence_transaction_types(mixed, random.Random(8), rules)
+            expected = transaction_sequence(30, 18, random.Random(8), rules)
+            self.assertEqual([e.event_type for e in mixed if e.event_type in {"deposit", "withdrawal"}], expected)
+            self.assertEqual(sum(e.event_type == "interest" for e in mixed), 48)
+            self.assertEqual(sum(e.event_type == "tax" for e in mixed), 48)
+            self.assertTrue(all(e.amount == 98000 for e in mixed if e.event_type in {"interest", "tax"}))
 
     def test_percentage_uses_each_side_and_complete_groups(self):
         sequence = transaction_sequence(30, 18, random.Random(2), PERCENT_RULES)

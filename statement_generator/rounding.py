@@ -8,6 +8,9 @@ from .transaction_runs import parse_run_rules, counts_fit_runs, FIT_ERROR
 
 STEPS = (1000, 500, 100, 50, 10, 5)
 CUSTOM_DEFAULTS = {1000: 35, 500: 35, 100: 10, 50: 10, 10: 0, 5: 10}
+AMOUNT_FIT_ERROR = ("The amount limits and rounding percentages cannot fit the required amount groups with at most "
+                    "two occurrences of each amount per debit/credit side. Widen the limits, reduce the transaction "
+                    "count, or change the rounding percentages.")
 
 
 def parse_percentages(value):
@@ -50,6 +53,72 @@ def candidates(value, step, minimum, maximum):
     return sorted(result)
 
 
+def _class_count(step, minimum, maximum):
+    count = maximum // step - (minimum - 1) // step
+    index = STEPS.index(step)
+    if index:
+        larger = STEPS[index - 1]
+        count -= maximum // larger - (minimum - 1) // larger
+    return max(0, count)
+
+
+def _repeat_limit(kind, value, config):
+    return 1 if kind == "deposit" and value == config.deposit_max_amount else 2
+
+
+def _step_slots(step, minimum, maximum, kind, config):
+    slots = 2 * _class_count(step, minimum, maximum)
+    if kind == "deposit" and minimum <= config.deposit_max_amount <= maximum and amount_class(config.deposit_max_amount) == step:
+        slots -= 1
+    return slots
+
+
+def _credit_band(config, minimum, maximum):
+    lower, upper = max(minimum, config.deposit_max_amount - 10000), min(maximum, config.deposit_max_amount - 5000)
+    return (lower, upper) if lower <= upper else None
+
+
+def _available_candidates(target, step, minimum, maximum, kind, seen, config):
+    def available(value, cap=2):
+        return (minimum <= value <= maximum and amount_class(value) == step and
+                seen[(kind, value)] < min(cap, _repeat_limit(kind, value, config)))
+
+    choices = {value for value in candidates(target, step, minimum, maximum) if available(value)}
+    # Find the nearest unused value even when all of the small candidate windows
+    # are occupied. Work is bounded by occupied values, not by the amount limit.
+    anchor = min(maximum, max(minimum, target))
+    left = math.floor(anchor / step) * step
+    right = left + step
+    while left >= minimum or right <= maximum:
+        adjacent = [value for value in (left, right) if available(value, 1)]
+        if adjacent:
+            choices.update(adjacent)
+            break
+        left -= step
+        right += step
+    if not choices:
+        left = math.floor(anchor / step) * step
+        right = left + step
+        while left >= minimum or right <= maximum:
+            adjacent = [value for value in (left, right) if available(value)]
+            if adjacent:
+                choices.update(adjacent)
+                break
+            left -= step
+            right += step
+    band = _credit_band(config, minimum, maximum) if kind == "deposit" else None
+    if band:
+        for value in candidates((band[0] + band[1]) / 2, step, band[0], band[1]):
+            if available(value):
+                choices.add(value)
+    return sorted(choices)
+
+
+def _high_credit_penalty(kind, value, config, minimum, maximum):
+    band = _credit_band(config, minimum, maximum) if kind == "deposit" else None
+    return 2 * max(0, value - band[1]) if band else 0
+
+
 def allocate_counts(total, percentages, rng):
     exact = {key: total * percent / 100 for key, percent in percentages.items()}
     counts = {key: math.floor(value) for key, value in exact.items()}
@@ -84,11 +153,11 @@ def _rounding_groups(config):
     return groups, members
 
 
-def _capacities(counts, allowed):
-    # Hall's condition: every subset of the four amount groups must have
-    # enough compatible rounding slots. With integer capacities this is exact.
-    return [sum(count for key, count in counts.items()
-                if any(mask & (1 << bucket) and key in allowed[bucket] for bucket in range(4)))
+def _capacities(counts, slots):
+    # Capacitated matching: each rounding group has only so many distinct
+    # amounts available in each side/band, with at most two uses per amount.
+    return [sum(min(count, sum(slots[bucket].get(key, 0) for bucket in range(4) if mask & (1 << bucket)))
+                for key, count in counts.items())
             for mask in range(16)]
 
 
@@ -111,7 +180,10 @@ def prepare_mix(total, config, rng, debit_total=None):
         choices = {key: [step for step in members.get(key, (key,)) if candidates(minimum, step, minimum, maximum)]
                    for key, count in counts.items() if count}
         allowed.append({key: steps for key, steps in choices.items() if steps})
-    capacities = _capacities(counts, allowed)
+    slots = [{key: sum(_step_slots(step, *bounds[bucket], "deposit" if bucket < 2 else "withdrawal", config)
+                       for step in steps) for key, steps in choices.items()}
+             for bucket, choices in enumerate(allowed)]
+    capacities = _capacities(counts, slots)
     debit_options = ([debit_total] if debit_total is not None else
                      list(range(max(5, (45 * total + 144) // 145), 70 * total // 170 + 1)))
     run_rules = parse_run_rules(config)
@@ -141,9 +213,9 @@ def prepare_mix(total, config, rng, debit_total=None):
         if low_options:
             low, high_min, high_max = rng.choice(low_options)
             high = rng.randint(high_min, high_max)
-            return {"counts": counts, "bounds": bounds, "allowed": allowed,
+            return {"counts": counts, "bounds": bounds, "allowed": allowed, "slots": slots,
                     "demands": [low, credits - low, high, debits - high]}
-    raise ValueError("The amount limits cannot fit the required amount groups and rounding percentages. Widen the deposit/withdrawal limits or change the percentages.")
+    raise ValueError(AMOUNT_FIT_ERROR)
 
 
 def _amount_buckets(plan, mix, rng):
@@ -161,6 +233,9 @@ def assign_rounding(plan, config, rng, mix=None):
         mix = prepare_mix(len(plan), config, rng, sum(event.event_type == "withdrawal" for event in plan))
     counts = dict(mix["counts"])
     demands = list(mix["demands"])
+    slots = [dict(bucket) for bucket in mix["slots"]]
+    step_slots = [{step: _step_slots(step, *mix["bounds"][bucket], "deposit" if bucket < 2 else "withdrawal", config)
+                   for steps in allowed.values() for step in steps} for bucket, allowed in enumerate(mix["allowed"])]
     buckets = _amount_buckets(plan, mix, rng)
     options = [(index, mix["allowed"][bucket]) for index, bucket in enumerate(buckets)]
     rng.shuffle(options)
@@ -172,22 +247,32 @@ def assign_rounding(plan, config, rng, mix=None):
         demands[bucket] -= 1
         available = []
         for key in allowed:
-            if counts[key] <= 0:
+            if counts[key] <= 0 or slots[bucket][key] <= 0:
                 continue
             counts[key] -= 1
-            if _fits(demands, _capacities(counts, mix["allowed"])):
+            slots[bucket][key] -= 1
+            if _fits(demands, _capacities(counts, slots)):
                 available.append(key)
             counts[key] += 1
+            slots[bucket][key] += 1
         if not available:
-            raise ValueError("The amount limits cannot fit the required amount groups and rounding percentages. Widen the deposit/withdrawal limits or change the percentages.")
+            raise ValueError(AMOUNT_FIT_ERROR)
         key = rng.choices(available, weights=[counts[key] for key in available], k=1)[0]
-        step = rng.choice(allowed[key])
+        step = rng.choice([step for step in allowed[key] if step_slots[bucket][step] > 0])
         counts[key] -= 1
+        slots[bucket][key] -= 1
+        step_slots[bucket][step] -= 1
         event = plan[index]
         minimum, maximum = mix["bounds"][bucket]
         target = event.amount if minimum <= event.amount <= maximum else rng.randint(minimum, maximum)
-        choices = candidates(target, step, minimum, maximum)
-        selected = min(choices, key=lambda value: (seen[(event.event_type, value)] * 2000 + abs(value - target), rng.random()))
+        band = _credit_band(config, minimum, maximum) if event.event_type == "deposit" else None
+        if band and target > band[1]:
+            target = rng.randint(*band)
+        choices = _available_candidates(target, step, minimum, maximum, event.event_type, seen, config)
+        if not choices:
+            raise ValueError(AMOUNT_FIT_ERROR)
+        selected = min(choices, key=lambda value: (seen[(event.event_type, value)],
+                       abs(value - target) + _high_credit_penalty(event.event_type, value, config, minimum, maximum), rng.random()))
         event.amount = float(selected)
         seen[(event.event_type, selected)] += 1
         constraints[index] = (step, minimum, maximum)
@@ -203,12 +288,13 @@ def adjust_plan(plan, config, constraints, delta, ending_date, rng):
         step, minimum, maximum = constraints[index]
         factor = 1 + config.interest_rate / 100 * max(0, (ending_date - event.date).days) / 365 * 0.94
         target = event.amount + delta / (sign * factor)
-        for value in candidates(target, step, minimum, maximum):
+        for value in _available_candidates(target, step, minimum, maximum, event.event_type, seen, config):
             change = value - event.amount
             residual = abs(delta - change * sign * factor)
             if change and residual < abs(delta) - 0.01:
                 duplicates = seen[(event.event_type, value)]
-                choices.append((residual + duplicates * 10, rng.random(), index, value))
+                penalty = _high_credit_penalty(event.event_type, value, config, minimum, maximum)
+                choices.append((residual + duplicates * 2000 + penalty, rng.random(), index, value))
     if not choices:
         return False
     _, _, index, value = min(choices)
