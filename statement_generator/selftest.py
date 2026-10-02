@@ -336,6 +336,33 @@ class GeneratorTests(unittest.TestCase):
                 self.assertLessEqual(max(length for kind, length in runs if kind == "deposit"), 3)
             self.assertGreater(len(orders), 1)
 
+    def test_opening_and_later_transaction_patterns_vary_with_fixed_counts(self) -> None:
+        from itertools import groupby
+        import random
+        from .generator import PlannedEvent, _resequence_transaction_types
+
+        for credits, debits in ((8, 5), (30, 18), (100, 45), (100, 70)):
+            openings, prefixes, later = set(), set(), set()
+            for seed in range(200):
+                plan = [PlannedEvent(kind, date(2026, 1, 1), 0) for kind in
+                        ["deposit"] * credits + ["withdrawal"] * debits]
+                _resequence_transaction_types(plan, random.Random(seed))
+                sequence = "".join("C" if event.event_type == "deposit" else "D" for event in plan)
+                runs = [(kind, len(list(items))) for kind, items in groupby(sequence)]
+                openings.add(runs[0])
+                prefixes.add(sequence[:6])
+                later.add(sequence[6:18])
+                self.assertEqual(sequence.count("C"), credits)
+                self.assertEqual(sequence.count("D"), debits)
+                self.assertTrue(all(length <= (3 if kind == "C" else 2) for kind, length in runs))
+                debit_runs = [length for kind, length in runs if kind == "D"]
+                self.assertIn(1, debit_runs)
+                self.assertTrue(1 <= debit_runs.count(2) <= 3)
+            self.assertEqual(openings, {("C", 1), ("C", 2), ("C", 3), ("D", 1), ("D", 2)})
+            self.assertTrue(any(prefix.startswith("DCD") for prefix in prefixes))
+            self.assertGreaterEqual(len(prefixes), 20)
+            self.assertGreaterEqual(len(later), 20)
+
     def test_deposit_amounts_limit_repeats_and_keep_amount_spread(self) -> None:
         result = generate_statement(self.build_config())
         deposits = [int(event.amount) for event in result.events if event.event_type == "deposit"]

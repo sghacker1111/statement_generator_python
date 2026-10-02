@@ -1009,25 +1009,23 @@ def _resequence_transaction_types(planned: list[PlannedEvent], rng: random.Rando
         scored["score"] = score
         scored_layouts.append(scored)
 
-    best_withdrawal_pair_score = min(
-        _ratio_distance((2 * int(item["withdrawal_pair_runs"])) / max(1, withdrawal_total), 0.30)
-        for item in scored_layouts
-    )
-    scored_layouts = [
-        item
-        for item in scored_layouts
-        if _ratio_distance((2 * int(item["withdrawal_pair_runs"])) / max(1, withdrawal_total), 0.30)
-        <= best_withdrawal_pair_score + 0.03
-    ]
-
-    best_score = min(float(item["score"]) for item in scored_layouts)
-    layouts = [item for item in scored_layouts if float(item["score"]) <= best_score + 0.22]
-
-    chosen_layout = rng.choices(
-        layouts,
-        weights=[float(item["weight"]) / (1.0 + (float(item["score"]) * 3.0)) for item in layouts],
-        k=1,
-    )[0]
+    # Choose the first two runs from all feasible patterns. Scoring the whole
+    # layout must not remove debit openings or push credit triples to the middle.
+    opening_options = {}
+    for item in scored_layouts:
+        credit_lengths = [length for length, key in ((1, "deposit_single_runs"),
+                          (2, "deposit_double_runs"), (3, "deposit_triple_runs")) if item[key]]
+        debit_lengths = [length for length, key in ((1, "withdrawal_single_runs"),
+                         (2, "withdrawal_pair_runs")) if item[key]]
+        first_lengths, second_lengths = ((credit_lengths, debit_lengths) if item["start_type"] == "deposit"
+                                         else (debit_lengths, credit_lengths))
+        for first in first_lengths:
+            for second in second_lengths:
+                opening_options.setdefault((item["start_type"], first, second), []).append(item)
+    opening = rng.choice(list(opening_options))
+    layouts = opening_options[opening]
+    chosen_layout = rng.choices(layouts,
+        weights=[float(item["weight"]) / (1.0 + float(item["score"])) for item in layouts], k=1)[0]
     start_type = str(chosen_layout["start_type"])
     end_type = str(chosen_layout["end_type"])
     deposit_runs = int(chosen_layout["deposit_runs"])
@@ -1053,42 +1051,19 @@ def _resequence_transaction_types(planned: list[PlannedEvent], rng: random.Rando
     if len(deposit_run_positions) != deposit_runs or len(withdrawal_run_positions) != withdrawal_runs:
         raise ValueError("Transaction run counts do not match the selected layout.")
 
-    run_lengths = [1] * total_runs
-
-    if deposit_triple_runs > 0:
-        candidate_positions = deposit_run_positions[:-1] if len(deposit_run_positions) > deposit_triple_runs else deposit_run_positions[:]
-        middle_left = max(0, len(deposit_run_positions) // 4)
-        middle_right = max(middle_left + 1, len(deposit_run_positions) - middle_left)
-        preferred = candidate_positions[middle_left:middle_right]
-        triple_pool = preferred if len(preferred) >= deposit_triple_runs else candidate_positions
-        triple_positions = rng.sample(triple_pool, deposit_triple_runs)
-    else:
-        triple_positions = []
-    for position in triple_positions:
-        run_lengths[position] = 3
-
-    remaining_deposit_positions = [position for position in deposit_run_positions if position not in triple_positions]
-    single_positions: list[int] = []
-    if deposit_single_runs > 0:
-        if len(remaining_deposit_positions) < deposit_single_runs:
-            raise ValueError("Not enough deposit run positions to place single deposit runs.")
-        preferred_single_positions = [position for position in remaining_deposit_positions if position not in triple_positions]
-        single_positions = rng.sample(preferred_single_positions, deposit_single_runs)
-    for position in single_positions:
-        run_lengths[position] = 1
-
-    for position in remaining_deposit_positions:
-        if position not in single_positions:
-            run_lengths[position] = 2
-
-    pair_positions: list[int] = []
-    if withdrawal_pair_runs > 0:
-        pair_positions = rng.sample(withdrawal_run_positions, withdrawal_pair_runs)
-    for position in pair_positions:
-        run_lengths[position] = 2
-    for position in withdrawal_run_positions:
-        if position not in pair_positions:
-            run_lengths[position] = 1
+    # Reserve the selected opening, then shuffle the remaining run lengths
+    # across the entire statement, including the final credit run.
+    remaining_lengths = {
+        "deposit": [1] * deposit_single_runs + [2] * deposit_double_runs + [3] * deposit_triple_runs,
+        "withdrawal": [1] * withdrawal_single_runs + [2] * withdrawal_pair_runs,
+    }
+    run_lengths = [opening[1], opening[2]]
+    for kind, length in zip(run_types[:2], run_lengths):
+        remaining_lengths[kind].remove(length)
+    for lengths in remaining_lengths.values():
+        rng.shuffle(lengths)
+    for kind in run_types[2:]:
+        run_lengths.append(remaining_lengths[kind].pop())
 
     sequence: list[EventType] = []
     for run_type, run_length in zip(run_types, run_lengths):

@@ -8,7 +8,7 @@ The debit transaction count is randomly selected between **45% and 70% of the cr
 
 At least **13 customer transactions** are required to satisfy all count and amount rules: the smallest valid mix is 8 credits and 5 debits. Opening/closing balance, interest, and tax rows are excluded from these percentages. A request that cannot fit the minimum reports an error.
 
-Debit ordering includes randomly positioned **single debits and consecutive pairs**. The existing maximum of two consecutive debits and up to three pairs is retained. Credit runs remain at most three transactions; their distribution adapts to the selected debit/credit ratio.
+Debit ordering includes randomly positioned **single debits and consecutive pairs**. The existing maximum of two consecutive debits and up to three pairs is retained. Credit runs remain at most three transactions; their distribution adapts to the selected debit/credit ratio. The opening is randomly chosen from all feasible single/double debit and single/double/triple credit patterns, including debit-credit-debit and three-credit starts. Later run lengths are shuffled across the statement. Leave the optional seed blank for a fresh statement; using the same seed intentionally reproduces the same statement. Different statements can occasionally share a short opening pattern.
 
 ## Amount groups
 
