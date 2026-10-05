@@ -20,6 +20,15 @@ def is_opening_balance_row(description: str, debit: float, credit: float, index:
     )
 
 
+def interest_rounding_places(value: object = 4) -> int:
+    text = str(value).strip() if value is not None else ""
+    if not text:
+        return 4
+    if text not in {"2", "4"}:
+        raise ValueError("Daily interest rounding must be 2 or 4 decimal places.")
+    return int(text)
+
+
 MONTH_NAMES = (
     "",
     "January",

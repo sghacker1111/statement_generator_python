@@ -25,7 +25,7 @@ from .generator import StatementConfig, generate_statement, names_from_text
 from .selftest import run_tests
 from .rounding import CUSTOM_DEFAULTS, parse_percentages
 from .holidays import MANUAL_HOLIDAY_SEED_VERSION, SUNDAY_HOLIDAY_START, is_recurring_holiday, manual_holiday_dates, manual_holiday_additions
-from .utils import format_amount, parse_iso_date, safe_filename
+from .utils import format_amount, interest_rounding_places, parse_iso_date, safe_filename
 
 
 DEFAULT_TEMPLATE_DIR = Path(r"D:\Finance Doc\Format")
@@ -85,6 +85,7 @@ class StatementGeneratorApp(tk.Tk):
             "opening_balance": "1500000",
             "target_closing_balance": "2550000",
             "interest_rate": "8",
+            "interest_rounding_places": "4",
             "tax_rate": "6",
             "cheque_start": "10000001",
             "first_date_description": "Opening Balance",
@@ -214,8 +215,11 @@ class StatementGeneratorApp(tk.Tk):
         for row, (label, key) in enumerate(labels):
             self._make_entry(parent, row, label, key)
 
+        ttk.Label(parent, text="Daily Interest Rounding (Round Up)").grid(row=len(labels), column=0, sticky="w", pady=4)
+        ttk.Combobox(parent, textvariable=self.vars["interest_rounding_places"], values=["4", "2"], state="readonly").grid(row=len(labels), column=1, sticky="ew", pady=4)
+        ttk.Label(parent, text="Round each day's interest up to 4 or 2 decimal places. Tax rounding stays at 2 places.").grid(row=len(labels) + 1, column=0, columnspan=2, sticky="w")
         rounding = ttk.LabelFrame(parent, text="Transaction Counts & Rounding", padding=8)
-        rounding.grid(row=len(labels), column=0, columnspan=2, sticky="ew", pady=8)
+        rounding.grid(row=len(labels) + 2, column=0, columnspan=2, sticky="ew", pady=8)
         ttk.Label(rounding, text="Debit count: 45–70% of credits; at least 13 customer transactions.\n10–20% of debits above 50,000; 20–30% of credits below 30,000.\nRandom debit groups of 1–3 and credit groups of 1–4. Interest, tax, and balance rows excluded.\nSame amount at most twice per side; exact credit maximum at most once.\nLarge credits prefer varied amounts 5,000–10,000 below the maximum when feasible.").grid(row=0, column=0, columnspan=2, sticky="w")
         ttk.Label(rounding, text="Rounding type").grid(row=1, column=0, sticky="w")
         selector = ttk.Combobox(rounding, textvariable=self.vars["amount_rounding_mode"],
@@ -236,7 +240,7 @@ class StatementGeneratorApp(tk.Tk):
         update_rounding()
 
         runs = ttk.LabelFrame(parent, text="Consecutive Transactions", padding=8)
-        runs.grid(row=len(labels) + 1, column=0, columnspan=2, sticky="ew", pady=8)
+        runs.grid(row=len(labels) + 3, column=0, columnspan=2, sticky="ew", pady=8)
         for column, (side, limit) in enumerate(RUN_LIMITS.items()):
             frame = ttk.LabelFrame(runs, text=side.title(), padding=6)
             frame.grid(row=0, column=column, sticky="nsew", padx=4)
@@ -266,7 +270,7 @@ class StatementGeneratorApp(tk.Tk):
             "- blocked dates come from the Holiday & Weekend manager"
         )
         ttk.Label(parent, text=note, justify="left", foreground="#374151").grid(
-            row=len(labels) + 2,
+            row=len(labels) + 4,
             column=0,
             columnspan=2,
             sticky="w",
@@ -835,6 +839,7 @@ class StatementGeneratorApp(tk.Tk):
             opening_balance=float(self.vars["opening_balance"].get()),
             target_closing_balance=float(self.vars["target_closing_balance"].get()),
             interest_rate=float(self.vars["interest_rate"].get()),
+            interest_rounding_places=interest_rounding_places(self.vars["interest_rounding_places"].get()),
             tax_rate=float(self.vars["tax_rate"].get()),
             cheque_start=int(self.vars["cheque_start"].get()),
             include_cheque_column=True,
@@ -1066,6 +1071,8 @@ class StatementGeneratorApp(tk.Tk):
         }
 
     def _apply_profile_payload(self, payload: dict) -> None:
+        if "interest_rounding_places" in self.vars:
+            self.vars["interest_rounding_places"].set(str(interest_rounding_places(payload.get("vars", {}).get("interest_rounding_places"))))
         for key, value in payload.get("vars", {}).items():
             if key in self.vars:
                 self.vars[key].set(value)

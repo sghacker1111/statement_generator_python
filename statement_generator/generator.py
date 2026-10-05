@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, ROUND_UP
 import random
 from typing import Literal
 
@@ -11,10 +11,10 @@ from .transaction_runs import parse_run_rules, transaction_sequence
 from .rounding import parse_percentages, assign_rounding, adjust_plan, validate_amount_mix, prepare_mix
 
 from .utils import (
-    ceil_two_decimals,
     format_amount,
     is_business_day,
     is_opening_balance_row,
+    interest_rounding_places,
     iso_date,
     next_business_day,
     parse_multiline_list,
@@ -83,6 +83,7 @@ class StatementConfig:
     withdrawal_text: str
     interest_text: str
     tax_text: str
+    interest_rounding_places: int = 4
     prepend_statement_mode: bool = False
     prepend_start_date: date | None = None
     prepend_anchor_date: date | None = None
@@ -1177,10 +1178,13 @@ def _build_event_map(events: list[PlannedEvent]) -> dict[date, list[PlannedEvent
     return mapped
 
 
-def _segment_interest(balance: float, annual_rate: float, days: int) -> float:
+def _segment_interest(balance: float, annual_rate: float, days: int, decimal_places: int = 4) -> float:
     if days <= 0 or balance <= 0:
         return 0.0
-    return _round_half_up((balance * annual_rate * days) / 36_500.0, 4)
+    daily_interest = (Decimal(str(balance)) * Decimal(str(annual_rate)) / Decimal("36500")).quantize(
+        Decimal(1).scaleb(-decimal_places), rounding=ROUND_UP,
+    )
+    return float(daily_interest * days)
 
 
 def _tax_rate_for_posting_date(config: StatementConfig, posting_date: date) -> float:
@@ -1219,6 +1223,7 @@ def simulate_statement(
 ) -> tuple[list[StatementRow], StatementSummary, float, date]:
     rows: list[StatementRow] = []
     summary = StatementSummary()
+    interest_places = interest_rounding_places(config.interest_rounding_places)
     event_map = _build_event_map(plan)
     posting_dates = {posting_date for _, posting_date in quarter_schedule}
 
@@ -1258,7 +1263,7 @@ def simulate_statement(
         nonlocal accrual_anchor, quarter_segments, balance
         days = max(0, (target_date - accrual_anchor).days)
         if days > 0:
-            segment = _segment_interest(balance, config.interest_rate, days)
+            segment = _segment_interest(balance, config.interest_rate, days, interest_places)
             if segment > 0:
                 quarter_segments.append(segment)
         accrual_anchor = target_date
@@ -1314,7 +1319,7 @@ def simulate_statement(
 
         if current in posting_dates:
             accrue_until(current)
-            interest_amount = _round_half_up(sum(quarter_segments), 2)
+            interest_amount = _round_half_up(sum(Decimal(str(segment)) for segment in quarter_segments), 2)
             tax_amount = _round_half_up((interest_amount * _tax_rate_for_posting_date(config, current)) / 100.0, 2)
             quarter_segments = []
             if interest_amount > 0:
@@ -1474,6 +1479,7 @@ def validate_config(config: StatementConfig, require_growth: bool = True) -> Non
         raise ValueError("Target closing balance must be greater than opening balance.")
     if not (0 <= config.interest_rate <= 100):
         raise ValueError("Interest rate must be between 0 and 100.")
+    interest_rounding_places(config.interest_rounding_places)
     if not (0 <= config.tax_rate <= 100):
         raise ValueError("Tax rate must be between 0 and 100.")
     if config.include_cheque_column and config.cheque_start < 1:

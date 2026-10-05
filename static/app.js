@@ -373,6 +373,11 @@ function applyFormValues(values) {
     }
   }
   loadRoundingPercentages(values.amount_rounding_percentages);
+  const interestRounding = form.elements.interest_rounding_places;
+  if (interestRounding) {
+    interestRounding.value = ["2", "4"].includes(String(values.interest_rounding_places))
+      ? String(values.interest_rounding_places) : "4";
+  }
   loadTransactionRunRules(values);
   updateManualRateState();
   updateRowCountState();
@@ -4384,10 +4389,11 @@ async function requestImportedInterestRateAndRecheck() {
     return;
   }
   let rateText = "";
+  const interestPlaces = form.elements.interest_rounding_places?.value || "4";
   try {
     rateText = await requestModalValue(
       "Imported Statement Interest Rate",
-      "Enter the interest rate used by this imported statement before checking interest and tax rows.",
+      `Enter the interest rate used by this imported statement. Daily interest currently uses Round Up to ${interestPlaces} decimal places. To switch precision, change Daily Interest Rounding in the form and click Check Statement again.`,
       {
         type: "number",
         defaultValue: form.elements.interest_rate?.value || "",
@@ -4409,7 +4415,7 @@ async function requestImportedInterestRateAndRecheck() {
     form.elements.interest_rate.dispatchEvent(new Event("change", { bubbles: true }));
   }
   await validateCurrentStatement();
-  appendLog(`Imported statement checked with ${parsedRate}% interest rate.`);
+  appendLog(`Imported statement checked with ${parsedRate}% interest rate and daily interest rounded up to ${interestPlaces} decimal places.`);
 }
 
 async function validateCurrentStatement() {

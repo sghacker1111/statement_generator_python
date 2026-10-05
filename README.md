@@ -122,10 +122,12 @@ The browser editor can scan and update supported custom `.xlsx` and `.docx` form
 
 ## Verification
 
+**Daily Interest Rounding** offers **Round Up to 4 decimal places** (default) and **Round Up to 2 decimal places**. Creation, recalculation, and imported-statement checking all use the selected option. Each day's interest is rounded upward before accumulation; posted interest and tax remain monetary amounts with the existing two-decimal Half Up posting rule. Profiles and saved statements retain the selection; older profiles default to four places. The desktop Statement tab also provides this setting.
+
 When importing and checking a statement, customer transactions on an interest/tax posting date are allowed before that day's interest and tax rows. Dates and row order are preserved during checking; ordinary holiday restrictions still apply. A first-row opening balance (including Balance B/F printed in an amount column) is carried forward without adding interest or tax on that opening date. Later posting dates and balances are still checked. Automatic generation and Update & Recalculate retain their existing date rules.
 
 ```powershell
-python -m unittest statement_generator.selftest statement_generator.test_holidays statement_generator.test_rounding statement_generator.test_import_checks
+python -m unittest statement_generator.selftest statement_generator.test_holidays statement_generator.test_rounding statement_generator.test_import_checks statement_generator.test_interest_rounding
 node --check static/app.js
 node --test tests/*.test.cjs
 ```

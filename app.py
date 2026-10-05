@@ -67,7 +67,7 @@ from statement_generator.letterheads import load_letterhead, save_letterhead
 from statement_generator.holidays import MANUAL_HOLIDAY_SEED_VERSION, SUNDAY_HOLIDAY_START, is_recurring_holiday, manual_holiday_dates, manual_holiday_additions  # noqa: E402
 from statement_generator.importers import import_xlsx_statement  # noqa: E402
 from statement_generator.selftest import run_tests  # noqa: E402
-from statement_generator.utils import format_amount, json_default, next_business_day, parse_iso_date, resolve_business_day, round_money, safe_filename  # noqa: E402
+from statement_generator.utils import format_amount, interest_rounding_places, json_default, next_business_day, parse_iso_date, resolve_business_day, round_money, safe_filename  # noqa: E402
 
 
 DEFAULT_TEMPLATE_DIR = Path(r"D:\Finance Doc\Format")
@@ -167,6 +167,7 @@ def profile_field_keys() -> list[str]:
         "amount_rounding_mode",
         "amount_rounding_percentages",
         "interest_rate",
+        "interest_rounding_places",
         "tax_rate",
         "cheque_start",
         "include_cheque_column",
@@ -220,6 +221,7 @@ def default_form_values() -> dict[str, str]:
         "amount_rounding_mode": "automatic",
         "amount_rounding_percentages": '{"1000":35,"500":35,"100":10,"50":10,"10":0,"5":10}',
         "interest_rate": "8",
+        "interest_rounding_places": "4",
         "tax_rate": "6",
         "cheque_start": "10000001",
         "include_cheque_column": "Yes",
@@ -2589,6 +2591,7 @@ def build_config(form_data: dict[str, object], forced_seed: int | None = None, u
         amount_rounding_percentages=(parse_percentages(form_data.get("amount_rounding_percentages", ""))
                                      if _normalize_amount_rounding_mode(text("amount_rounding_mode")) == "custom" else {}),
         interest_rate=_safe_float(text("interest_rate")),
+        interest_rounding_places=interest_rounding_places(text("interest_rounding_places")),
         tax_rate=_safe_float(text("tax_rate")),
         cheque_start=_safe_int(text("cheque_start")),
         include_cheque_column=_parse_yes_no(text("include_cheque_column"), default=True),
