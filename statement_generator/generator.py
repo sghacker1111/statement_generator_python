@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
-from decimal import Decimal, ROUND_HALF_UP, ROUND_UP
+from decimal import Decimal, ROUND_HALF_UP
 import random
 from typing import Literal
 
@@ -83,7 +83,7 @@ class StatementConfig:
     withdrawal_text: str
     interest_text: str
     tax_text: str
-    interest_rounding_places: int = 4
+    interest_rounding_places: int = 2
     prepend_statement_mode: bool = False
     prepend_start_date: date | None = None
     prepend_anchor_date: date | None = None
@@ -1178,11 +1178,12 @@ def _build_event_map(events: list[PlannedEvent]) -> dict[date, list[PlannedEvent
     return mapped
 
 
-def _segment_interest(balance: float, annual_rate: float, days: int, decimal_places: int = 4) -> float:
+def _segment_interest(balance: float, annual_rate: float, days: int, decimal_places: int = 2) -> float:
+    decimal_places = interest_rounding_places(decimal_places)
     if days <= 0 or balance <= 0:
         return 0.0
     daily_interest = (Decimal(str(balance)) * Decimal(str(annual_rate)) / Decimal("36500")).quantize(
-        Decimal(1).scaleb(-decimal_places), rounding=ROUND_UP,
+        Decimal(1).scaleb(-decimal_places), rounding=ROUND_HALF_UP,
     )
     return float(daily_interest * days)
 
@@ -1554,7 +1555,9 @@ def validate_transaction_dates(config: StatementConfig, rows: list[dict[str, obj
             if imported_check and legitimate_posting:
                 posted_dates.add(date_text)
             message = ""
-            if not is_business_day(row_date, config.holiday_dates) and not legitimate_posting:
+            if imported_check and date_text in posting_dates and not legitimate_posting and date_text in posted_dates:
+                message = "Customer transactions on a posting date must appear before interest and tax rows."
+            elif not is_business_day(row_date, config.holiday_dates) and not legitimate_posting and not (imported_check and date_text in posting_dates):
                 message = "Holiday/Saturday/Sunday entries are not allowed."
             elif date_text in posting_dates and not legitimate_posting:
                 if not imported_check:
@@ -1720,6 +1723,12 @@ def validate_edited_statement(config: StatementConfig, edited_rows: list[dict[st
         expected_system_rows = [row for row in expected_result.rows if row.category in {"opening", "interest", "tax", "closing"}]
         if imported_check and not any(row["category"] == "opening" for _, row in actual_system_rows):
             expected_system_rows = [row for row in expected_system_rows if row.category != "opening"]
+        if imported_check:
+            actual_postings = {(row["date"], row["category"]) for _, row in actual_system_rows if row["category"] in {"interest", "tax"}}
+            for expected_row in expected_system_rows:
+                if expected_row.category in {"interest", "tax"} and (expected_row.date, expected_row.category) not in actual_postings:
+                    add_error(max(0, last_index), iso_date(expected_row.date), "",
+                              f"Missing {expected_row.category} posting on {iso_date(expected_row.date)}.", ["date", "description"])
         for position, (row_index, actual_row) in enumerate(actual_system_rows):
             if position >= len(expected_system_rows):
                 add_error(

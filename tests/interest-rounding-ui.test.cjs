@@ -10,7 +10,7 @@ const source = fs.readFileSync(path.join(root, php ? 'assets/app.js' : 'static/a
 const html = fs.readFileSync(path.join(root, php ? 'index.php' : 'templates/index.html'), 'utf8');
 
 function fixture() {
-  const precision = { name: 'interest_rounding_places', value: '4' };
+  const precision = { name: 'interest_rounding_places', value: '2' };
   const rate = { name: 'interest_rate', value: '8', dispatchEvent() {} };
   const requests = [];
   const ctx = vm.createContext({
@@ -36,38 +36,40 @@ function fixture() {
   return { ctx, precision, requests };
 }
 
-test('daily interest selector has two choices and legacy profiles reset to four places', () => {
-  const select = html.match(/<select name="interest_rounding_places"[^]*?<\/select>/)[0];
-  assert.deepEqual([...select.matchAll(/option value="(\d+)"/g)].map(match => match[1]), ['4', '2']);
-  assert.match(select, /Round Up to 2 decimal places/);
+test('daily interest field is fixed and profile restoration sends two places', () => {
+  assert.ok(/<input[^>]*type="hidden"[^>]*name="interest_rounding_places"[^>]*value="2"/.test(html),
+            'The fixed daily rounding field submits a hidden two-place value.');
+  assert.doesNotMatch(html, /<select[^>]*name="interest_rounding_places"/);
   const { ctx, precision } = fixture();
-  ctx.applyFormValues({ interest_rounding_places: '2' });
-  assert.equal(ctx.getFormValues().interest_rounding_places, '2');
-  ctx.applyFormValues({});
-  assert.equal(precision.value, '4');
-  ctx.applyFormValues({ interest_rounding_places: 2 });
-  assert.equal(precision.value, '2');
+  for (const values of [{ interest_rounding_places: '2' }, {},
+                        { interest_rounding_places: '4' }, { interest_rounding_places: 4 }]) {
+    ctx.applyFormValues(values);
+    assert.equal(precision.value, '2');
+    assert.equal(ctx.getFormValues().interest_rounding_places, '2');
+  }
 });
 
-test('generation and checking send the selected daily precision', async () => {
+test('generation and checking normalize historical precision to two places', async () => {
   const { ctx, requests } = fixture();
   for (const places of ['2', '4']) {
     ctx.applyFormValues({ interest_rounding_places: places });
     await ctx.generateStatement();
     assert.equal(requests.at(-1).action, 'generate');
-    assert.equal(requests.at(-1).body.interest_rounding_places, places);
+    assert.equal(requests.at(-1).body.interest_rounding_places, '2');
     await ctx.validateCurrentStatement();
     assert.equal(requests.at(-1).action, 'validate_statement');
-    assert.equal(requests.at(-1).body.config.interest_rounding_places, places);
+    assert.equal(requests.at(-1).body.config.interest_rounding_places, '2');
     assert.equal(requests.at(-1).body.source_type, 'imported');
   }
 });
 
-test('import recheck explains and keeps the selected daily precision', async () => {
+test('import recheck explains the fixed half up rule and sends two places', async () => {
   const { ctx, requests } = fixture();
-  ctx.applyFormValues({ interest_rounding_places: '2' });
+  ctx.applyFormValues({ interest_rounding_places: '4' });
   await ctx.requestImportedInterestRateAndRecheck();
-  assert.match(ctx.promptMessage, /Round Up to 2 decimal places/);
+  assert.match(ctx.promptMessage, /2 decimal places.*Half Up/);
+  assert.match(ctx.promptMessage, /third digit.*5/);
+  assert.doesNotMatch(ctx.promptMessage, /Round Up|switch precision|4 decimal/);
   assert.equal(requests.at(-1).body.config.interest_rounding_places, '2');
   assert.equal(requests.at(-1).body.config.interest_rate, '7');
 });

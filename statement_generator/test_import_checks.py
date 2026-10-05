@@ -38,6 +38,19 @@ class ImportCheckTests(unittest.TestCase):
                 self.row("2024-10-17", "Tax", 558, 0, 379742),
                 self.row("2024-10-21", "Balance C/F", 0, 0, 379742, "closing")]
 
+    @staticmethod
+    def write_xlsx(path, rows):
+        values = [["Date", "Description", "Debit", "Credit", "Balance"]]
+        values += [[row[key] for key in ("date", "description", "debit", "credit", "balance")] for row in rows]
+        xml = '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
+        for index, cells in enumerate(values, 1):
+            xml += f'<row r="{index}">' + ''.join(
+                f'<c r="{chr(65 + col)}{index}" t="inlineStr"><is><t>{escape(str(value))}</t></is></c>'
+                for col, value in enumerate(cells)) + '</row>'
+        xml += '</sheetData></worksheet>'
+        with ZipFile(path, "w") as archive:
+            archive.writestr("xl/worksheets/sheet1.xml", xml)
+
     def test_imported_transactions_before_postings_preserve_dates_and_balances(self):
         config, rows = self.config(), self.posting_rows()
         self.assertEqual(validate_edited_statement(config, rows, imported_check=True), [])
@@ -81,16 +94,41 @@ class ImportCheckTests(unittest.TestCase):
         rows[1]["credit"] += 1
         self.assertTrue(validate_edited_statement(config, rows, True))
 
-    def test_opening_on_holiday_is_allowed_but_customer_transactions_stay_blocked(self):
+    def test_opening_and_customer_rows_on_weekend_posting_date_are_allowed(self):
         config = self.config("2026-10-17", "2026-10-20")  # Saturday and a posting date.
         rows = [self.row("2026-10-17", "Balance B/F", 0, 365000, 365000),
                 self.row("2026-10-20", "Balance C/F", 0, 0, 365000, "closing")]
         self.assertEqual(validate_edited_statement(config, rows, True), [])
         rows.insert(1, self.row("2026-10-17", "Transfer in", 0, 10000, 375000))
+        self.assertEqual(validate_transaction_dates(config, rows, True), [])
+        rows[1]["date"] = "2026-10-18"  # Sunday, without a scheduled posting.
         self.assertTrue(validate_transaction_dates(config, rows, True))
-        config = self.config()
-        config.holiday_dates.add(date(2024, 10, 17))
-        self.assertTrue(validate_transaction_dates(config, self.posting_rows(), True))
+
+    def test_holiday_posting_dates_allow_customer_rows_only_before_postings(self):
+        for year, manual_holiday in ((2024, True), (2026, False)):
+            with self.subTest(year=year, manual_holiday=manual_holiday):
+                config = self.config(f"{year}-10-01", f"{year}-10-20")
+                rows = self.posting_rows()
+                rows[0]["date"] = f"{year}-10-01"
+                rows[-1]["date"] = f"{year}-10-20"
+                for row in rows[1:5]:
+                    row["date"] = f"{year}-10-17"
+                    row["is_system"] = False  # Dates and amounts do not identify customer rows as postings.
+                if manual_holiday:
+                    config.holiday_dates.add(date(year, 10, 17))
+                self.assertEqual(validate_edited_statement(config, rows, True), [])
+                result = recalculate_edited_statement(config, rows, True)
+                self.assertEqual([event.date for event in result.events], [date(year, 10, 17)] * 2)
+                self.assertEqual(result.final_balance, 379742)
+                for position in (3, 4):
+                    changed = [dict(row) for row in rows]
+                    customer = changed.pop(1)
+                    changed.insert(position, customer)
+                    errors = validate_transaction_dates(config, changed, True)
+                    self.assertTrue(any(error["row_index"] == position and "before interest and tax" in error["message"] for error in errors), errors)
+                rows[1]["date"] = f"{year}-10-16"
+                config.holiday_dates.add(date(year, 10, 16))
+                self.assertTrue(any(error["row_index"] == 1 for error in validate_transaction_dates(config, rows, True)))
 
     def test_custom_posting_date_and_secondary_date_fields(self):
         config = self.config()
@@ -106,18 +144,9 @@ class ImportCheckTests(unittest.TestCase):
         rows = [self.row("2024-07-16", "Balance B/F", 0, 365000, 365000),
                 self.row("2024-07-17", "Transfer in", 0, 10000, 375000),
                 self.row("2024-07-18", "Balance C/F", 0, 0, 375000)]
-        values = [["Date", "Description", "Debit", "Credit", "Balance"]]
-        values += [[row[key] for key in ("date", "description", "debit", "credit", "balance")] for row in rows]
-        xml = '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
-        for index, cells in enumerate(values, 1):
-            xml += f'<row r="{index}">' + ''.join(
-                f'<c r="{chr(65 + col)}{index}" t="inlineStr"><is><t>{escape(str(value))}</t></is></c>'
-                for col, value in enumerate(cells)) + '</row>'
-        xml += '</sheetData></worksheet>'
         with TemporaryDirectory() as root:
             path = Path(root) / "sample.xlsx"
-            with ZipFile(path, "w") as archive:
-                archive.writestr("xl/worksheets/sheet1.xml", xml)
+            self.write_xlsx(path, rows)
             imported = import_xlsx_statement(path, {})
         self.assertEqual(float(imported["form_values"]["opening_balance"]), 365000)
         self.assertEqual(float(imported["form_values"]["target_closing_balance"]), 375000)
@@ -127,6 +156,38 @@ class ImportCheckTests(unittest.TestCase):
         result = recalculate_edited_statement(config, imported["edited_rows"], True)
         self.assertEqual(result.summary.deposit_count, 1)
         self.assertEqual(result.final_balance, 375000)
+
+    def test_xlsx_abbreviated_opening_on_us_posting_date_keeps_net_balance(self):
+        for label in ("BAL B/F", "Balance B/F", "BALANCE BROUGHT FORWARD"):
+            with self.subTest(label=label), TemporaryDirectory() as root:
+                rows = [self.row("07/16/2026", label, 0, 365000, 365000),
+                        self.row("10/17/2026", "Interest", 0, 9300, 374300),
+                        self.row("10/17/2026", "Tax", 558, 0, 373742),
+                        self.row("10/19/2026", "Balance C/F", 0, 0, 373742)]
+                path = Path(root) / "opening.xlsx"
+                self.write_xlsx(path, rows)
+                imported = import_xlsx_statement(path, {})
+                self.assertEqual(imported["form_values"]["start_date"], "2026-07-16")
+                self.assertEqual(float(imported["form_values"]["opening_balance"]), 365000)
+                self.assertEqual(imported["edited_rows"][0]["category"], "opening")
+                config = self.config("2026-07-16", "2026-10-19")
+                self.assertEqual(validate_edited_statement(config, imported["edited_rows"], True), [])
+                result = recalculate_edited_statement(config, imported["edited_rows"], True)
+                self.assertEqual(result.events, [])
+                self.assertEqual(result.summary.total_interest, 9300)
+                self.assertEqual(result.summary.total_tax, 558)
+                self.assertEqual([(row.category, row.date) for row in result.rows if row.category in {"interest", "tax"}],
+                                 [("interest", date(2026, 10, 17)), ("tax", date(2026, 10, 17))])
+                imported["edited_rows"][1]["credit"] += 1
+                self.assertTrue(validate_edited_statement(config, imported["edited_rows"], True))
+
+    def test_missing_later_interest_and_tax_are_reported_after_opening_posting_date(self):
+        config = replace(self.config("2024-07-16", "2024-10-18"), closing_row_mode="transaction_allowed")
+        rows = [self.row("2024-07-16", "Balance B/F", 0, 365000, 365000),
+                self.row("2024-10-18", "Transfer in", 0, 10000, 375000)]
+        errors = validate_edited_statement(config, rows, True)
+        for category in ("interest", "tax"):
+            self.assertTrue(any(category in error["message"].lower() for error in errors), errors)
 
     def test_http_imported_source_selects_import_checks(self):
         import app as web
@@ -163,6 +224,97 @@ class ImportCheckTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+
+    def test_check_only_xlsx_import_check_recalculate_and_reload_preserve_import_rules(self):
+        import app as web
+        from auth_store import AuthStore
+
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            auth = AuthStore(root / "auth.db")
+            user = auth.create_user("import-check-user", "temporary-test-password", "user", "check_only",
+                                    full_name="Import Test", mobile_number="0000000000")
+            token = auth.login(user.username, "temporary-test-password")["token"]
+            workbook = root / "statement.xlsx"
+            self.write_xlsx(workbook, [
+                self.row("07/16/2024", "Balance B/F", 0, 365000, 365000),
+                self.row("10/17/2024", "Transfer in", 0, 10000, 375000),
+                self.row("10/17/2024", "Interest", 0, 9300, 384300),
+                self.row("10/17/2024", "Tax", 558, 0, 383742),
+                self.row("10/18/2024", "Balance C/F", 0, 0, 383742),
+            ])
+            form = {**web.default_form_values(), "customer_name": "SAMPLE Customer", "interest_rate": "10",
+                    "tax_rate": "6", "include_cheque_column": "No", "interest_text": "Interest", "tax_text": "Tax"}
+
+            class Handler(web.StatementWebHandler):
+                def log_message(self, *_args):
+                    pass
+
+            with patch.object(web, "AUTH_STORE", auth), patch.object(web, "STATE_FILE", root / "state.json"), \
+                    patch.object(web, "USER_STATE_ROOT", root / "users"), patch.object(web, "WEB_TEMP_ROOT", root):
+                server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+                thread = Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+
+                def request(route, payload=None, *, body=None, content_type="application/json"):
+                    connection = HTTPConnection(*server.server_address, timeout=10)
+                    try:
+                        connection.request("GET" if payload is None and body is None else "POST", route,
+                                           body if body is not None else None if payload is None else json.dumps(payload),
+                                           {"Authorization": f"Bearer {token}", "Content-Type": content_type})
+                        response = connection.getresponse()
+                        return response.status, json.loads(response.read())
+                    finally:
+                        connection.close()
+
+                try:
+                    boundary = "sg-import-regression-boundary"
+                    body = (
+                        f'--{boundary}\r\nContent-Disposition: form-data; name="config"\r\n\r\n{json.dumps(form)}\r\n'
+                        f'--{boundary}\r\nContent-Disposition: form-data; name="statement_file"; filename="statement.xlsx"\r\n'
+                        'Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n\r\n'
+                    ).encode() + workbook.read_bytes() + f"\r\n--{boundary}--\r\n".encode()
+                    status, imported = request("/api/import_statement", body=body,
+                                               content_type=f"multipart/form-data; boundary={boundary}")
+                    self.assertEqual(status, 200, imported)
+                    self.assertEqual(imported["source_type"], "imported")
+                    self.assertEqual(imported["current_user"]["access_mode"], "check_only")
+                    self.assertEqual(imported["config"]["start_date"], "2024-07-16")
+                    self.assertEqual(float(imported["config"]["opening_balance"]), 365000)
+                    self.assertEqual(imported["validation_errors"], [])
+                    self.assertEqual(imported["rows"][0]["category"], "opening")
+
+                    payload = {"config": imported["config"], "edited_rows": imported["rows"],
+                               "statement_id": imported["statement_id"], "source_type": imported["source_type"]}
+                    for dates_only in (True, False):
+                        status, checked = request("/api/validate_statement", {**payload, "dates_only": dates_only})
+                        self.assertEqual(status, 200, checked)
+                        self.assertTrue(checked["ok"], checked)
+                    status, updated = request("/api/recalculate_statement", payload)
+                    self.assertEqual(status, 200, updated)
+                    self.assertEqual(updated["source_type"], "imported")
+                    self.assertEqual(updated["statement_id"], imported["statement_id"])
+                    self.assertEqual([(row["date"], row["credit"]) for row in updated["rows"] if row["category"] == "deposit"],
+                                     [("2024-10-17", 10000)])
+                    self.assertEqual([(row["date"], row["credit"], row["debit"]) for row in updated["rows"] if row["category"] in {"interest", "tax"}],
+                                     [("2024-10-17", 9300, 0), ("2024-10-17", 0, 558)])
+                    self.assertEqual(updated["rows"][-1]["balance"], 383742)
+
+                    status, detail = request(f'/api/statement_detail?id={imported["statement_id"]}')
+                    self.assertEqual(status, 200, detail)
+                    self.assertEqual(detail["source_type"], "imported")
+                    self.assertEqual(detail["result"]["rows"], updated["rows"])
+                    status, checked = request("/api/validate_statement", {
+                        "config": detail["config"], "edited_rows": detail["result"]["rows"],
+                        "statement_id": detail["id"], "source_type": detail["source_type"],
+                    })
+                    self.assertEqual(status, 200, checked)
+                    self.assertTrue(checked["ok"], checked)
+                    self.assertEqual(auth.statement_history(user)["total_statements"], 1)
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=5)
 
 
 if __name__ == "__main__":

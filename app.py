@@ -221,7 +221,7 @@ def default_form_values() -> dict[str, str]:
         "amount_rounding_mode": "automatic",
         "amount_rounding_percentages": '{"1000":35,"500":35,"100":10,"50":10,"10":0,"5":10}',
         "interest_rate": "8",
-        "interest_rounding_places": "4",
+        "interest_rounding_places": "2",
         "tax_rate": "6",
         "cheque_start": "10000001",
         "include_cheque_column": "Yes",
@@ -266,6 +266,7 @@ def bootstrap_defaults(current_user: AuthUser) -> dict[str, str]:
     for key in profile_field_keys():
         if key in saved_profile:
             defaults[key] = str(saved_profile[key])
+    defaults["interest_rounding_places"] = str(interest_rounding_places(saved_profile.get("interest_rounding_places")))
     return defaults
 
 
@@ -2591,7 +2592,7 @@ def build_config(form_data: dict[str, object], forced_seed: int | None = None, u
         amount_rounding_percentages=(parse_percentages(form_data.get("amount_rounding_percentages", ""))
                                      if _normalize_amount_rounding_mode(text("amount_rounding_mode")) == "custom" else {}),
         interest_rate=_safe_float(text("interest_rate")),
-        interest_rounding_places=interest_rounding_places(text("interest_rounding_places")),
+        interest_rounding_places=interest_rounding_places(form_data.get("interest_rounding_places")),
         tax_rate=_safe_float(text("tax_rate")),
         cheque_start=_safe_int(text("cheque_start")),
         include_cheque_column=_parse_yes_no(text("include_cheque_column"), default=True),
@@ -3617,10 +3618,10 @@ class StatementWebHandler(BaseHTTPRequestHandler):
                     if float(last_row.get("debit", 0) or 0) > 0 or float(last_row.get("credit", 0) or 0) > 0:
                         form_payload["closing_row_mode"] = "transaction_allowed"
                 config = build_config(form_payload, user_id=current_user.id)
-                result = recalculate_edited_statement(config, edited_rows)
+                source_type = str(payload.get("source_type", "edited")).strip() or "edited"
+                result = recalculate_edited_statement(config, edited_rows, imported_check=source_type == "imported")
                 response = serialize_result(config, result)
                 statement_id = int(payload.get("statement_id", 0) or 0) or None
-                source_type = str(payload.get("source_type", "edited")).strip() or "edited"
                 saved = auth_store().save_statement(current_user, response, form_payload, statement_id, source_type, False)
                 response["statement_id"] = saved["statement_id"]
                 response["source_type"] = source_type

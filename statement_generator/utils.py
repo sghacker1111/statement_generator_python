@@ -16,17 +16,18 @@ def is_opening_balance_row(description: str, debit: float, credit: float, index:
     text = re.sub(r"[^a-z0-9]+", " ", description.lower()).strip()
     return index == 0 and (
         (debit <= 0 and credit <= 0)
-        or bool(re.search(r"\b(opening balance|balance b ?f|brought forward|previous balance|balance forward)\b|^(opening|b ?f)$", text))
+        or bool(re.search(r"\b(opening balance|bal(?:ance)? b ?f|brought forward|previous balance|balance forward)\b|^(opening|b ?f)$", text))
     )
 
 
-def interest_rounding_places(value: object = 4) -> int:
+def interest_rounding_places(value: object = 2) -> int:
+    """Normalize the retired four-place setting to fixed two-place daily interest."""
     text = str(value).strip() if value is not None else ""
     if not text:
-        return 4
+        return 2
     if text not in {"2", "4"}:
-        raise ValueError("Daily interest rounding must be 2 or 4 decimal places.")
-    return int(text)
+        raise ValueError("Daily interest rounding must be 2 decimal places (Half Up).")
+    return 2
 
 
 MONTH_NAMES = (

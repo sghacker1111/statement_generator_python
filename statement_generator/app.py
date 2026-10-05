@@ -85,7 +85,7 @@ class StatementGeneratorApp(tk.Tk):
             "opening_balance": "1500000",
             "target_closing_balance": "2550000",
             "interest_rate": "8",
-            "interest_rounding_places": "4",
+            "interest_rounding_places": "2",
             "tax_rate": "6",
             "cheque_start": "10000001",
             "first_date_description": "Opening Balance",
@@ -215,9 +215,9 @@ class StatementGeneratorApp(tk.Tk):
         for row, (label, key) in enumerate(labels):
             self._make_entry(parent, row, label, key)
 
-        ttk.Label(parent, text="Daily Interest Rounding (Round Up)").grid(row=len(labels), column=0, sticky="w", pady=4)
-        ttk.Combobox(parent, textvariable=self.vars["interest_rounding_places"], values=["4", "2"], state="readonly").grid(row=len(labels), column=1, sticky="ew", pady=4)
-        ttk.Label(parent, text="Round each day's interest up to 4 or 2 decimal places. Tax rounding stays at 2 places.").grid(row=len(labels) + 1, column=0, columnspan=2, sticky="w")
+        ttk.Label(parent, text="Daily Interest Rounding").grid(row=len(labels), column=0, sticky="w", pady=4)
+        ttk.Label(parent, text="2 decimal places (Half Up)").grid(row=len(labels), column=1, sticky="w", pady=4)
+        ttk.Label(parent, text="Third digit 5 or more: increase the second digit; below 5: keep it. Tax uses 2 places (Half Up).").grid(row=len(labels) + 1, column=0, columnspan=2, sticky="w")
         rounding = ttk.LabelFrame(parent, text="Transaction Counts & Rounding", padding=8)
         rounding.grid(row=len(labels) + 2, column=0, columnspan=2, sticky="ew", pady=8)
         ttk.Label(rounding, text="Debit count: 45–70% of credits; at least 13 customer transactions.\n10–20% of debits above 50,000; 20–30% of credits below 30,000.\nRandom debit groups of 1–3 and credit groups of 1–4. Interest, tax, and balance rows excluded.\nSame amount at most twice per side; exact credit maximum at most once.\nLarge credits prefer varied amounts 5,000–10,000 below the maximum when feasible.").grid(row=0, column=0, columnspan=2, sticky="w")
@@ -1074,7 +1074,7 @@ class StatementGeneratorApp(tk.Tk):
         if "interest_rounding_places" in self.vars:
             self.vars["interest_rounding_places"].set(str(interest_rounding_places(payload.get("vars", {}).get("interest_rounding_places"))))
         for key, value in payload.get("vars", {}).items():
-            if key in self.vars:
+            if key in self.vars and key != "interest_rounding_places":
                 self.vars[key].set(value)
         self.deposit_names_text.delete("1.0", "end")
         self.deposit_names_text.insert("1.0", payload.get("deposit_names", ""))
