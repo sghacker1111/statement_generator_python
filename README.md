@@ -122,8 +122,10 @@ The browser editor can scan and update supported custom `.xlsx` and `.docx` form
 
 ## Verification
 
+When importing and checking a statement, customer transactions on an interest/tax posting date are allowed before that day's interest and tax rows. Dates and row order are preserved during checking; ordinary holiday restrictions still apply. A first-row opening balance (including Balance B/F printed in an amount column) is carried forward without adding interest or tax on that opening date. Later posting dates and balances are still checked. Automatic generation and Update & Recalculate retain their existing date rules.
+
 ```powershell
-python -m unittest statement_generator.selftest statement_generator.test_holidays statement_generator.test_rounding
+python -m unittest statement_generator.selftest statement_generator.test_holidays statement_generator.test_rounding statement_generator.test_import_checks
 node --check static/app.js
 node --test tests/*.test.cjs
 ```

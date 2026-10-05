@@ -11,6 +11,15 @@ from typing import Any, Iterable
 from .holidays import is_recurring_holiday
 
 
+def is_opening_balance_row(description: str, debit: float, credit: float, index: int) -> bool:
+    """Recognize a first-row carry-forward balance, including amount-column layouts."""
+    text = re.sub(r"[^a-z0-9]+", " ", description.lower()).strip()
+    return index == 0 and (
+        (debit <= 0 and credit <= 0)
+        or bool(re.search(r"\b(opening balance|balance b ?f|brought forward|previous balance|balance forward)\b|^(opening|b ?f)$", text))
+    )
+
+
 MONTH_NAMES = (
     "",
     "January",

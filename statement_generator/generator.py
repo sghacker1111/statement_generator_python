@@ -14,6 +14,7 @@ from .utils import (
     ceil_two_decimals,
     format_amount,
     is_business_day,
+    is_opening_balance_row,
     iso_date,
     next_business_day,
     parse_multiline_list,
@@ -298,6 +299,24 @@ def _normalized_manual_description(config: StatementConfig, event_type: EventTyp
     if event_type == "withdrawal" and (flags["deposit"] or flags["interest"] or flags["tax"]):
         return ""
     return normalized
+
+
+def _imported_check_rows(config: StatementConfig, rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Classify imported rows without inferring interest/tax from the date alone."""
+    result = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            result.append(row)
+            continue
+        debit = float(row.get("debit", 0) or 0)
+        credit = float(row.get("credit", 0) or 0)
+        description = str(row.get("description", ""))
+        category = "opening" if is_opening_balance_row(description, debit, credit, index) else _effective_edited_category(
+            config, str(row.get("category", "")), description, debit, credit,
+            index, len(rows) - 1, str(row.get("date", "")), set(),
+        )
+        result.append({**row, "category": category})
+    return result
 
 def _quarter_actual_date(year: int, month: int, overrides: dict[tuple[int, int], date] | None = None) -> date:
     override_date = (overrides or {}).get((year, month))
@@ -1196,6 +1215,7 @@ def simulate_statement(
     quarter_schedule: list[tuple[date, date]],
     rng: random.Random,
     enforce_max_rows: bool = True,
+    accrual_start: date | None = None,
 ) -> tuple[list[StatementRow], StatementSummary, float, date]:
     rows: list[StatementRow] = []
     summary = StatementSummary()
@@ -1204,7 +1224,7 @@ def simulate_statement(
 
     balance = round_money(config.opening_balance)
     previous_quarter = _previous_quarter_date(opening_business_date, config.quarter_date_overrides)
-    accrual_anchor = previous_quarter or opening_business_date
+    accrual_anchor = accrual_start or previous_quarter or opening_business_date
     quarter_segments: list[float] = []
 
     include_cheque_column = config.include_cheque_column
@@ -1387,6 +1407,7 @@ def _manual_plan_from_rows(
     config: StatementConfig,
     rows: list[dict[str, object]],
     quarter_schedule: list[tuple[date, date]] | None = None,
+    imported_check: bool = False,
 ) -> list[PlannedEvent]:
     plan: list[PlannedEvent] = []
     sequence = 0
@@ -1405,7 +1426,7 @@ def _manual_plan_from_rows(
         if not isinstance(row, dict):
             continue
         category = str(row.get("category", "")).strip()
-        if category in {"interest", "tax"}:
+        if category in {"interest", "tax"} or (imported_check and category == "opening"):
             continue
         debit = round_money(float(row.get("debit", 0) or 0))
         credit = round_money(float(row.get("credit", 0) or 0))
@@ -1414,7 +1435,8 @@ def _manual_plan_from_rows(
         if debit <= 0 and credit <= 0:
             continue
         event_date = date.fromisoformat(str(row.get("date", "")))
-        event_date = normalized_event_date(event_date)
+        if not imported_check:
+            event_date = normalized_event_date(event_date)
         event_type: EventType = "deposit" if credit > 0 else "withdrawal"
         plan.append(
             PlannedEvent(
@@ -1490,9 +1512,12 @@ def _desired_statement_row_count(config: StatementConfig) -> int | None:
     return int(config.statement_row_count) if config.statement_row_count is not None else None
 
 
-def validate_transaction_dates(config: StatementConfig, rows: list[dict[str, object]]) -> list[dict[str, object]]:
+def validate_transaction_dates(config: StatementConfig, rows: list[dict[str, object]], imported_check: bool = False) -> list[dict[str, object]]:
     """Validate dates before preserving rows, showing a preview, or exporting."""
     errors: list[dict[str, object]] = []
+    if imported_check:
+        rows = _imported_check_rows(config, rows)
+    posted_dates: set[str] = set()
     for index, row in enumerate(rows):
         if not isinstance(row, dict):
             continue
@@ -1517,20 +1542,29 @@ def validate_transaction_dates(config: StatementConfig, rows: list[dict[str, obj
             posting_dates = {iso_date(value) for value in _quarter_candidates(row_date, row_date, config.quarter_date_overrides)}
             category = _effective_edited_category(config, str(row.get("category", "")), description,
                                                  debit, credit, index, len(rows) - 1, date_text, posting_dates)
+            if imported_check and index == 0 and category == "opening":
+                continue
             legitimate_posting = category in {"interest", "tax"} and date_text in posting_dates
+            if imported_check and legitimate_posting:
+                posted_dates.add(date_text)
             message = ""
             if not is_business_day(row_date, config.holiday_dates) and not legitimate_posting:
                 message = "Holiday/Saturday/Sunday entries are not allowed."
             elif date_text in posting_dates and not legitimate_posting:
-                message = "Transactions are not allowed on interest/tax posting dates."
+                if not imported_check:
+                    message = "Transactions are not allowed on interest/tax posting dates."
+                elif date_text in posted_dates:
+                    message = "Customer transactions on a posting date must appear before interest and tax rows."
             if message:
                 errors.append({"row_index": index, "date": date_text, "description": description,
                                "message": message, "fields": [field_name]})
     return errors
 
 
-def validate_edited_statement(config: StatementConfig, edited_rows: list[dict[str, object]]) -> list[dict[str, object]]:
+def validate_edited_statement(config: StatementConfig, edited_rows: list[dict[str, object]], imported_check: bool = False) -> list[dict[str, object]]:
     validate_config(config, require_growth=False)
+    if imported_check:
+        edited_rows = _imported_check_rows(config, edited_rows)
     if config.prepend_statement_mode:
         if config.prepend_anchor_date is None:
             return [
@@ -1552,7 +1586,7 @@ def validate_edited_statement(config: StatementConfig, edited_rows: list[dict[st
                     "fields": ["prepend_anchor_date"],
                 }
             ]
-        return validate_transaction_dates(config, _rows_on_or_after(edited_rows, config.prepend_anchor_date))
+        return validate_transaction_dates(config, _rows_on_or_after(edited_rows, config.prepend_anchor_date), imported_check)
     opening_business_date = resolve_business_day(config.start_date, config.holiday_dates)
     ending_business_date = resolve_business_day(config.end_date, config.holiday_dates)
     quarter_schedule = build_quarter_schedule(
@@ -1563,7 +1597,7 @@ def validate_edited_statement(config: StatementConfig, edited_rows: list[dict[st
     )
     posting_dates = {iso_date(posting_date) for _, posting_date in quarter_schedule}
 
-    errors = validate_transaction_dates(config, edited_rows)
+    errors = validate_transaction_dates(config, edited_rows, imported_check)
     running_balance = round_money(config.opening_balance)
     include_cheque_column = config.include_cheque_column
     expected_cheque: int | None = None
@@ -1624,7 +1658,8 @@ def validate_edited_statement(config: StatementConfig, edited_rows: list[dict[st
 
         if debit > 0 and credit > 0:
             messages.append(("A statement row cannot contain both debit and credit amounts.", ["debit", "credit"]))
-        messages.extend(_description_validation_messages(config, category, description, debit, credit))
+        if not (imported_check and category == "opening"):
+            messages.extend(_description_validation_messages(config, category, description, debit, credit))
 
         if include_cheque_column and debit > 0 and category == "withdrawal":
             cheque = str(row.get("cheque_no", "")).strip()
@@ -1671,12 +1706,14 @@ def validate_edited_statement(config: StatementConfig, edited_rows: list[dict[st
             add_error(index, date_text, description, message, fields)
 
     try:
-        expected_result = recalculate_edited_statement(config, edited_rows)
+        expected_result = recalculate_edited_statement(config, edited_rows, imported_check)
     except Exception:
         expected_result = None
 
     if expected_result is not None:
         expected_system_rows = [row for row in expected_result.rows if row.category in {"opening", "interest", "tax", "closing"}]
+        if imported_check and not any(row["category"] == "opening" for _, row in actual_system_rows):
+            expected_system_rows = [row for row in expected_system_rows if row.category != "opening"]
         for position, (row_index, actual_row) in enumerate(actual_system_rows):
             if position >= len(expected_system_rows):
                 add_error(
@@ -1995,19 +2032,28 @@ def _recalculate_with_prepend(config: StatementConfig, edited_rows: list[dict[st
     )
 
 
-def recalculate_edited_statement(config: StatementConfig, edited_rows: list[dict[str, object]]) -> StatementResult:
+def recalculate_edited_statement(config: StatementConfig, edited_rows: list[dict[str, object]], imported_check: bool = False) -> StatementResult:
     validate_config(config, require_growth=False)
     if config.prepend_statement_mode:
         return _recalculate_with_prepend(config, edited_rows)
-    opening_business_date = resolve_business_day(config.start_date, config.holiday_dates)
-    ending_business_date = resolve_business_day(config.end_date, config.holiday_dates)
+    if imported_check:
+        edited_rows = _imported_check_rows(config, edited_rows)
+    opening_business_date = config.start_date if imported_check else resolve_business_day(config.start_date, config.holiday_dates)
+    ending_business_date = config.end_date if imported_check else resolve_business_day(config.end_date, config.holiday_dates)
     quarter_schedule = build_quarter_schedule(
         opening_business_date,
         ending_business_date,
         config.holiday_dates,
         config.quarter_date_overrides,
     )
-    plan = _manual_plan_from_rows(config, edited_rows, quarter_schedule)
+    opening_on_posting_date = bool(
+        imported_check and edited_rows and edited_rows[0].get("category") == "opening"
+        and str(edited_rows[0].get("date", "")) == iso_date(opening_business_date)
+        and any(posting == opening_business_date for _, posting in quarter_schedule)
+    )
+    if opening_on_posting_date:
+        quarter_schedule = [(actual, posting) for actual, posting in quarter_schedule if posting != opening_business_date]
+    plan = _manual_plan_from_rows(config, edited_rows, quarter_schedule, imported_check)
     rows, summary, final_balance, last_transaction_date = simulate_statement(
         config,
         plan,
@@ -2015,6 +2061,7 @@ def recalculate_edited_statement(config: StatementConfig, edited_rows: list[dict
         ending_business_date,
         quarter_schedule,
         random.Random(config.seed or 0),
+        accrual_start=opening_business_date if opening_on_posting_date else None,
     )
     issue_date = next_business_day(last_transaction_date, config.holiday_dates, include_self=False)
     return StatementResult(

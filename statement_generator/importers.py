@@ -6,7 +6,7 @@ import re
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
-from .utils import round_money
+from .utils import is_opening_balance_row, round_money
 
 
 DATE_PATTERNS = (
@@ -79,12 +79,12 @@ def import_xlsx_statement(file_path: Path, current_form: dict[str, object]) -> d
     for index, row in enumerate(parsed_rows):
         debit = float(row["debit"])
         credit = float(row["credit"])
-        expected_balance = round_money(running_balance - debit + credit)
+        category = _classify_row(str(row["description"]), debit, credit, index, len(parsed_rows))
+        expected_balance = opening_balance if category == "opening" else round_money(running_balance - debit + credit)
         source_balance = float(row["balance"])
         if abs(expected_balance - source_balance) > 0.01:
             corrected_rows += 1
         running_balance = expected_balance
-        category = _classify_row(str(row["description"]), debit, credit, index, len(parsed_rows))
         editable_rows.append(
             {
                 "date": str(row["date"]),
@@ -287,7 +287,7 @@ def _cell_text(value: object) -> str:
 
 def _classify_row(description: str, debit: float, credit: float, index: int, total_rows: int) -> str:
     text = description.strip().lower()
-    if index == 0 and ((credit <= 0 and debit <= 0) or "opening" in text or "balance b/f" in text):
+    if is_opening_balance_row(description, debit, credit, index):
         return "opening"
     if index == total_rows - 1 and credit <= 0 and debit <= 0 and ("closing" in text or "balance c/f" in text):
         return "closing"
@@ -306,7 +306,7 @@ def _derived_opening_balance(first_row: dict[str, object]) -> float:
     debit = float(first_row.get("debit", 0.0) or 0.0)
     credit = float(first_row.get("credit", 0.0) or 0.0)
     balance = float(first_row.get("balance", 0.0) or 0.0)
-    if debit <= 0 and credit <= 0:
+    if is_opening_balance_row(str(first_row.get("description", "")), debit, credit, 0):
         return round_money(balance)
     return round_money(balance + debit - credit)
 

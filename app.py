@@ -3581,8 +3581,8 @@ class StatementWebHandler(BaseHTTPRequestHandler):
                 form_payload = imported["form_values"]
                 config = build_config(form_payload, user_id=current_user.id)
                 imported_rows = imported["edited_rows"]
-                validation_errors = validate_edited_statement(config, imported_rows)
-                result = recalculate_edited_statement(config, imported_rows)
+                validation_errors = validate_edited_statement(config, imported_rows, imported_check=True)
+                result = recalculate_edited_statement(config, imported_rows, imported_check=True)
                 response = serialize_result(config, result)
                 if not config.prepend_statement_mode:
                     response["rows"] = serialize_preview_rows(imported_rows)
@@ -3651,7 +3651,8 @@ class StatementWebHandler(BaseHTTPRequestHandler):
                     if float(last_row.get("debit", 0) or 0) > 0 or float(last_row.get("credit", 0) or 0) > 0:
                         form_payload["closing_row_mode"] = "transaction_allowed"
                 config = build_config(form_payload, user_id=current_user.id)
-                errors = validate_transaction_dates(config, edited_rows) if payload.get("dates_only") is True else validate_edited_statement(config, edited_rows)
+                imported_check = payload.get("source_type") == "imported"
+                errors = validate_transaction_dates(config, edited_rows, imported_check) if payload.get("dates_only") is True else validate_edited_statement(config, edited_rows, imported_check)
                 self._send_json(
                     {
                         "ok": not errors,

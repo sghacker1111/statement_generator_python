@@ -465,10 +465,12 @@ class GeneratorTests(unittest.TestCase):
 
 
 def run_tests() -> unittest.result.TestResult:
+    from .test_import_checks import ImportCheckTests
     from .test_holidays import HolidayTests
     from .test_rounding import RoundingTests
     from .test_transaction_runs import TransactionRunTests
     suite = unittest.TestSuite([
+        unittest.defaultTestLoader.loadTestsFromTestCase(ImportCheckTests),
         unittest.defaultTestLoader.loadTestsFromTestCase(GeneratorTests),
         unittest.defaultTestLoader.loadTestsFromTestCase(HolidayTests),
         unittest.defaultTestLoader.loadTestsFromTestCase(RoundingTests),
