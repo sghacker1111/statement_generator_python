@@ -1,0 +1,2 @@
+# Preserve upstream PDF/OCR assets byte-for-byte for the recorded checksums.
+static/vendor/pdf-ocr/** -text -whitespace

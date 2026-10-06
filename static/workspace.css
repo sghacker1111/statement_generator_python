@@ -19,3 +19,7 @@ body:not(.auth-locked) .page-shell{width:auto;min-width:0;max-width:none;margin:
 @media print{.workspace-sidebar,.workspace-heading,.sidebar-backdrop,.toolbar,.topbar{display:none!important}body:not(.auth-locked) .page-shell{margin:0;padding:0}.workspace{display:block}}
 
 .export-letterhead-toggle{padding:16px;background:#eaf5f1;border-radius:10px;margin-bottom:22px}body[data-statement-context="check"] #create-stat-btn{display:none!important}
+
+.pdf-import-panel{padding:18px;margin-top:22px}.pdf-import-panel .table-shell{max-height:520px;overflow:auto}.pdf-import-panel td input{min-width:82px;width:100%;padding:8px;border:1px solid #cbd6df;border-radius:4px}.pdf-import-panel td input[data-field="description"]{min-width:220px}.pdf-import-panel input[aria-invalid="true"]{border:2px solid #c32d35;background:#fff1f2}.pdf-import-panel li{font-size:12px;margin:5px 0}.pdf-import-panel #pdf-progress{font-weight:600}
+
+.pdf-import-panel td{padding:6px}.pdf-import-panel td button{padding:5px;font-size:11px;white-space:nowrap}

@@ -7,7 +7,7 @@ const root=path.resolve(__dirname,'..');
 const assets=fs.existsSync(path.join(root,'assets'))?'assets':'static';
 const source=fs.readFileSync(path.join(root,assets,'workspace.js'),'utf8');
 const ctx=vm.createContext({Date,JSON});
-vm.runInContext(source.replaceAll('export ','')+'\nthis.api={descriptionParts,dashboardSeries,checkingValues};',ctx);
+vm.runInContext(source.replace(/^import .*;\r?\n/gm,'').replaceAll('export ','')+'\nthis.api={descriptionParts,dashboardSeries,checkingValues};',ctx);
 test('checking description options persist in check requests and never affect generation',()=>{
   for(const scope of ['labels','labels_extra']){
     const values=ctx.api.checkingValues({deposit_text:'Deposit',description_extra_text:'Reference'},true,'profile','Existing',scope);

@@ -3947,7 +3947,8 @@ class StatementWebHandler(BaseHTTPRequestHandler):
         csp = "; ".join(
             [
                 "default-src 'self'",
-                "script-src 'self'",
+                "script-src 'self' 'wasm-unsafe-eval'",
+                "worker-src 'self'",
                 "style-src 'self' 'unsafe-inline'",
                 "img-src 'self' data:",
                 "font-src 'self' data:",
@@ -4031,7 +4032,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND, "File not found")
             return
         body = path.read_bytes()
-        guessed = content_type or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        guessed = content_type or {".mjs": "text/javascript", ".wasm": "application/wasm"}.get(path.suffix.lower()) or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         self.send_response(200)
         self.send_header("Content-Type", guessed)
         self.send_header("Content-Length", str(len(body)))

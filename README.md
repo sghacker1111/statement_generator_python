@@ -159,3 +159,5 @@ Administrators can also use the statement workspace. User Management edits conta
 Export & Import includes normal and selected-template exports, A4 print preview, per-format letterhead settings, and an **Include saved A4 letterhead** export checkbox. Letterhead exports return editable `.xlsx` / `.docx` packages; printing uses the selected format's separately saved letterhead. Excel displays header pictures in Page Layout / Print Preview, rather than Normal cell view. Existing sample-document markings are preserved.
 
 Native normal letterhead downloads require `openpyxl`, `python-docx`, and `lxml`: `python -m pip install openpyxl python-docx lxml`. Template export and legacy `.xls` / `.doc` conversion retain their existing Office engine requirements.
+
+PDF and scanned statement import is available under **Statement Check > Import PDF Statement**. Review OCR rows, download the extracted Excel workbook, or import directly into the existing checker. See [PDF_IMPORT.md](PDF_IMPORT.md) for supported layouts, limits and hosting setup.
