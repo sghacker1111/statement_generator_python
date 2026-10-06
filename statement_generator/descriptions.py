@@ -62,7 +62,7 @@ def profile_message(config, category, description):
               "interest": "interest_text", "tax": "tax_text"}
     if category in system:
         expected = " ".join(getattr(config, system[category]).split())
-        return "" if normalized == expected else f"{category.title()} description must match the saved profile: {expected}."
+        return "" if normalized == expected else f"{category.title()} description must match the configured text (including letter case): {expected}."
     side = "deposit" if category == "deposit" else "withdrawal" if category == "withdrawal" else ""
     if not side:
         return ""
@@ -71,14 +71,14 @@ def profile_message(config, category, description):
         label = " ".join(getattr(config, side + "_text").split())
         pattern = lambda text: r"(?<!\w)" + re.escape(text) + r"(?!\w)"
         column = "credit" if side == "deposit" else "debit"
-        if not label or not re.search(pattern(label), normalized, re.IGNORECASE):
-            return f"{side.title()} text must appear in the description for this {column} amount: {label}."
+        if not label or not re.search(pattern(label), normalized):
+            return f"{side.title()} text must appear with matching letter case in the description for this {column} amount: {label}."
         other = " ".join(getattr(config, ("withdrawal" if side == "deposit" else "deposit") + "_text").split())
-        remaining = re.sub(pattern(label), " ", normalized, flags=re.IGNORECASE)
-        if other and other.casefold() != label.casefold() and re.search(pattern(other), remaining, re.IGNORECASE):
+        remaining = re.sub(pattern(label), " ", normalized)
+        if other and other != label and re.search(pattern(other), remaining):
             return f"The description contains the opposite transaction text for this {column} amount: {other}."
         extra = " ".join(config.description_extra_text.split())
-        if scope == "labels_extra" and (not extra or not re.search(pattern(extra), normalized, re.IGNORECASE)):
+        if scope == "labels_extra" and (not extra or not re.search(pattern(extra), normalized)):
             return f"Extra Text must appear in the description: {extra}."
         return ""
     if side == "withdrawal" and not config.include_cheque_column:

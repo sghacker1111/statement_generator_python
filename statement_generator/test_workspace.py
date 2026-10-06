@@ -27,8 +27,10 @@ class WorkspaceTests(TestCase):
             for side, label in [('deposit', 'Cash Deposit'), ('withdrawal', 'Cash Withdraw')]:
                 other = 'Cash Withdraw' if side == 'deposit' else 'Cash Deposit'
                 for text in (f'Branch Transfer: {label} BY: A Different Person / reference 123',
-                             f'{label.lower()}   Branch   Transfer', f'{label}: Branch Transfer / Another Name'):
+                             f'{label}   Branch   Transfer', f'{label}: Branch Transfer / Another Name'):
                     self.assertEqual(profile_message(config, side, text), '', (scope, text))
+                for changed_case in (label.lower(), label.upper(), label.swapcase()):
+                    self.assertTrue(profile_message(config, side, f'{changed_case} Branch Transfer Person'))
                 self.assertTrue(profile_message(config, side, f'{other} Branch Transfer Person'))
                 self.assertTrue(profile_message(config, side, f'{label} {other} Branch Transfer'))
                 self.assertTrue(profile_message(config, side, f'{label}ed Branch Transfer'))
@@ -75,6 +77,26 @@ class WorkspaceTests(TestCase):
             changed[1]['description'] = 'Transfer in Any Name'
             self.assertTrue(any(e['row_index'] == 1 and 'description' in e['fields'] for e in validate_edited_statement(config, changed, True)))
             self.assertEqual(validate_edited_statement(replace(config, description_check_scope='labels'), changed, True), [])
+            for index in (1, 2, 3, 4):
+                changed = [dict(row) for row in rows]
+                changed[index]['description'] = changed[index]['description'].swapcase()
+                errors = validate_edited_statement(config, changed, True)
+                self.assertTrue(any(e['row_index'] == index and 'description' in e['fields'] for e in errors), (mode, index, errors))
+
+    def test_normal_check_uses_custom_interest_and_tax_text_without_extra_text(self):
+        fixture = imported.ImportCheckTests()
+        rows = fixture.posting_rows()
+        rows[3].update(description='Quarterly Return', category='deposit')
+        rows[4].update(description='Withholding', category='withdrawal')
+        config = replace(fixture.config(), description_check_mode='basic', description_check_scope='labels',
+                         deposit_text='Transfer in', withdrawal_text='Transfer out',
+                         interest_text='Quarterly Return', tax_text='Withholding', description_extra_text='Optional reference')
+        self.assertEqual(validate_edited_statement(config, rows, True), [])
+        for index, wrong in ((3, 'Interest'), (4, 'Tax')):
+            changed = [dict(row) for row in rows]
+            changed[index].update(description=wrong, category='interest' if index == 3 else 'tax')
+            errors = validate_edited_statement(config, changed, True)
+            self.assertTrue(any(e['row_index'] == index and 'description' in e['fields'] for e in errors), errors)
 
     def test_normal_check_ignores_wording_profile_check_enforces_it(self):
         fixture=imported.ImportCheckTests(); rows=fixture.posting_rows()

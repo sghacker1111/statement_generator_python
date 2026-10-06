@@ -236,7 +236,8 @@ def _description_validation_messages(
             messages.append(("Tax should be posted in the debit column only.", ["debit", "credit"]))
         side = "deposit" if credit > 0 and debit <= 0 else "withdrawal" if debit > 0 and credit <= 0 else category
         customer_scope = category in {"deposit", "withdrawal"} and config.description_check_scope in {"labels", "labels_extra"}
-        if config.description_check_mode == "profile" or customer_scope:
+        posting_scope = category in {"interest", "tax"} and config.description_check_scope in {"labels", "labels_extra"}
+        if config.description_check_mode == "profile" or customer_scope or posting_scope:
             message = profile_message(config, side if customer_scope else category, normalized)
             if message:
                 messages.append((message, ["description"]))

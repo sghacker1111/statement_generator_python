@@ -1,4 +1,4 @@
-import { createWorkspace } from "./workspace.js?v=20261006-description-check";
+import { createWorkspace } from "./workspace.js?v=20261006-case-sensitive-check";
 let workspaceUI = null;
 let authBusy = false;
 let sessionEpoch = 0;
@@ -5439,7 +5439,7 @@ function bindEvents() {
 workspaceUI = createWorkspace({
   state, apiUrl, fetchJson, requestPassword, setTab, getValues:getFormValues, applyValues:applyFormValues,
   clearStatement:clearCurrentStatement, saveDraft:saveDraftProfile, scheduleSave:scheduleAutoProfileSave,
-  renderUsers, log:appendLog,
+  renderUsers, log:appendLog, loadProfile:loadProfileFormat,
   renderStatement() {
     renderSummary(state.currentStatement?.summary || {});
     renderPreviewRows(state.statementEditMode ? state.editableRows : (state.currentStatement?.rows || []));

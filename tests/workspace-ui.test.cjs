@@ -40,6 +40,21 @@ test('empty and invalid history gives a zero chart',()=>{
 });
 
 const app=fs.readFileSync(path.join(root,assets,'app.js'),'utf8');
+test('quick generation profile loading applies existing settings and refreshes dependent choices',async()=>{
+  const calls=[];
+  const profile={customer_name:'Sample customer',deposit_text:'CASH DEPOSIT',interest_text:'Quarterly Return',tax_text:'Withholding'};
+  const context=vm.createContext({workspaceUI:{isChecking:()=>false},profileFormatSelect:{value:'Existing profile'},
+    apiUrl:(action,params)=>{assert.equal(action,'profile_formats');assert.equal(params.name,'Existing profile');return action;},
+    fetchJson:async(_url,options)=>{assert.equal(options.method,'GET');return {profile,name:'Existing profile'};},
+    applyFormValues:value=>calls.push(['apply',value]),saveDraftProfile:async()=>calls.push(['draft']),
+    refreshTemplates:async()=>calls.push(['templates']),refreshHolidayRows:async()=>calls.push(['holidays']),
+    refreshPostingDates:async()=>calls.push(['posting-dates']),state:{holidayView:2026},appendLog:()=>{}});
+  const match=app.match(/^async function loadProfileFormat\([^]*?(?=^(?:async )?function )/m);
+  vm.runInContext(match[0],context);await context.loadProfileFormat();
+  assert.equal(calls[0][1],profile);
+  assert.deepEqual(calls.slice(1),[['draft'],['templates'],['holidays'],['posting-dates']]);
+  context.profileFormatSelect.value='';await assert.rejects(context.loadProfileFormat(),/Select a saved profile/);
+});
 test('import captures checking context and interest before sending the file',async()=>{
   const calls=[];
   class Body {append(name,value){calls.push(['field',name,value]);}}
