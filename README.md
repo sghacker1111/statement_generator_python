@@ -143,3 +143,17 @@ The optional files in `site_integration/` can add a button from another website 
 The supplied 332 dates are included in `data/manual_holidays.json`. Saturdays are always blocked, and Sundays remain blocked from April 5, 2026 under the existing rule. Add other holidays in **Holidays & Weekends**. See [HOLIDAY_RULES.md](HOLIDAY_RULES.md) for editing, account migration, and deployment details.
 
 See [Office format editing, sample exports and A4 letterheads](OFFICE_FORMATS.md).
+
+## Sidebar workspace and profile checking
+
+The web app opens on Home, with a collapsible navigation panel and weekly/monthly charts of the saved generation history. The chart identifies its 50-record history limit. Generation, checking, saved profiles, holidays, exports, formats, history, and devices have separate navigation entries. The generation draft and imported checking work are kept separately in the current session. Named profiles and uploaded formats remain stored under their existing user accounts.
+
+Statement Check offers **New / normal statement** (dates, balances, cheque numbers, interest and tax) and **Saved statement profile** (also verifies opening/closing descriptions, deposit/withdrawal composition, interest/tax labels, connector and extra text). Enter the imported statement's interest rate before import. Saved checking profiles are loaded on the server under the signed-in user's ownership; their account balances and date range do not replace imported values.
+
+Texts & Names supports three ordered slots per side: None, Name, Label and Extra Text. The connector checkbox and text field control `by`, `BY`, `By`, `By:` or another word. Existing profiles retain their previous ordering and connector behavior until edited. Name pools continue to supply generation names; profile checking accepts customer names in the configured name position.
+
+Administrators can also use the statement workspace. User Management edits contact details and offers reversible hiding and blocking. Hidden accounts retain login access and saved data; blocked accounts cannot log in, and their existing tokens are revoked. Show hidden users restores visibility in the management list. The administrator account cannot hide or block itself. Existing databases gain two status columns without replacing user, profile, format or statement records.
+
+Export & Import includes normal and selected-template exports, A4 print preview, per-format letterhead settings, and an **Include saved A4 letterhead** export checkbox. Letterhead exports return editable `.xlsx` / `.docx` packages; printing uses the selected format's separately saved letterhead. Excel displays header pictures in Page Layout / Print Preview, rather than Normal cell view. Existing sample-document markings are preserved.
+
+Native normal letterhead downloads require `openpyxl`, `python-docx`, and `lxml`: `python -m pip install openpyxl python-docx lxml`. Template export and legacy `.xls` / `.doc` conversion retain their existing Office engine requirements.

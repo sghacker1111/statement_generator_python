@@ -27,9 +27,11 @@ from auth_store import AuthStore, AuthUser
 
 
 APP_ROOT = Path(__file__).resolve().parent
-for vendor_path in (APP_ROOT / ".deps", APP_ROOT / ".vendor", APP_ROOT.parent / ".vendor"):
+# Prefer packages installed for the active interpreter over optional vendored
+# binaries, which may have been built for a different Python version.
+for vendor_path in (APP_ROOT.parent / ".vendor", APP_ROOT / ".vendor", APP_ROOT / ".deps"):
     if vendor_path.exists():
-        sys.path.insert(0, str(vendor_path))
+        sys.path.append(str(vendor_path))
 sys.path.insert(0, str(APP_ROOT))
 
 from statement_generator.exchange_rate import (  # noqa: E402
@@ -46,11 +48,15 @@ from statement_generator.exporters import (  # noqa: E402
     default_output_name,
     export_certificate,
     export_statement,
+    export_normal_statement,
+    export_normal_certificate,
     resolve_exchange_rate,
     scan_template_directory,
 )
+from statement_generator.descriptions import FIELDS as DESCRIPTION_FIELDS, CHECK_FIELDS as DESCRIPTION_CHECK_FIELDS
 from statement_generator.transaction_runs import RUN_DEFAULTS, parse_run_rules
 from statement_generator.generator import (  # noqa: E402
+    _imported_check_rows,
     StatementConfig,
     generate_statement,
     names_from_text,
@@ -64,6 +70,7 @@ from statement_generator.office_formats import convert_office, editable_office_c
 from statement_generator.document_layout import word_html
 from statement_generator.sample_documents import sample_html
 from statement_generator.letterheads import load_letterhead, save_letterhead
+from statement_generator.letterhead_export import embed_letterhead
 from statement_generator.holidays import MANUAL_HOLIDAY_SEED_VERSION, SUNDAY_HOLIDAY_START, is_recurring_holiday, manual_holiday_dates, manual_holiday_additions  # noqa: E402
 from statement_generator.importers import import_xlsx_statement  # noqa: E402
 from statement_generator.selftest import run_tests  # noqa: E402
@@ -97,6 +104,10 @@ BS_MONTH_LABELS = {
     12: "Chaitra",
 }
 DESCRIPTION_MODE_OPTIONS = {
+    "Extra Text + Name": "extra_name",
+    "Name + Extra Text": "name_extra",
+    "Label + Extra Text": "label_extra",
+    "Extra Text + Label": "extra_label",
     "Name + Label": "name_plus_label",
     "Label + Name": "label_plus_name",
     "Name Only": "name_only",
@@ -181,6 +192,7 @@ def profile_field_keys() -> list[str]:
         "deposit_text",
         "withdrawal_text",
         "description_extra_text",
+        *DESCRIPTION_FIELDS,
         "interest_text",
         "tax_text",
         "deposit_mode",
@@ -237,6 +249,9 @@ def default_form_values() -> dict[str, str]:
         "deposit_text": "Cash Deposit",
         "withdrawal_text": "Cheque Withdrawal",
         "description_extra_text": "",
+        "deposit_description_parts": "", "withdrawal_description_parts": "",
+        "deposit_connector_enabled": "legacy", "withdrawal_connector_enabled": "legacy",
+        "deposit_connector_text": "by", "withdrawal_connector_text": "by",
         "interest_text": "Interest Posted",
         "tax_text": "Tax Deducted",
         "deposit_mode": "Label + Name",
@@ -2599,6 +2614,8 @@ def build_config(form_data: dict[str, object], forced_seed: int | None = None, u
         deposit_text=text("deposit_text"),
         withdrawal_text=text("withdrawal_text"),
         description_extra_text=text("description_extra_text"),
+        **{key: text(key) for key in DESCRIPTION_FIELDS},
+        description_check_mode=text("description_check_mode") if text("description_check_mode") in {"basic", "profile"} else "legacy",
         interest_text=text("interest_text"),
         tax_text=text("tax_text"),
         date_column_mode=text("date_column_mode").lower() if text("date_column_mode").lower() in {"single", "txn_value"} else "single",
@@ -2617,6 +2634,25 @@ def build_config(form_data: dict[str, object], forced_seed: int | None = None, u
         quarter_date_overrides=_quarter_override_lookup(merged_quarter_override_map(start_text, end_text, user_id)),
         seed=_safe_int(seed_text) if seed_text else None,
     )
+
+
+def check_form(form: dict[str, object], user: AuthUser) -> dict[str, object]:
+    mode = str(form.get("statement_check_mode", ""))
+    if not mode:
+        return form
+    if mode not in {"new", "profile"}:
+        raise ValueError("Choose a new statement or saved profile check.")
+    form = dict(form)
+    form["description_check_mode"] = "profile" if mode == "profile" else "basic"
+    if mode == "profile":
+        name = str(form.get("check_profile_name", "")).strip()
+        if not name:
+            raise ValueError("Select a saved statement profile for checking.")
+        saved = auth_store().load_profile_format(user, name)["profile"]
+        defaults = default_form_values()
+        for field in DESCRIPTION_CHECK_FIELDS:
+            form[field] = saved.get(field, defaults.get(field, ""))
+    return form
 
 
 def serialize_result(config: StatementConfig, result) -> dict[str, object]:
@@ -2690,8 +2726,10 @@ def serialize_preview_rows(rows: list[dict[str, object]]) -> list[dict[str, obje
     return preview_rows
 
 
-def hydrate_result_payload(config: StatementConfig, result_payload: dict[str, object]):
-    errors = validate_transaction_dates(config, result_payload.get("rows", []))
+def hydrate_result_payload(config: StatementConfig, result_payload: dict[str, object], imported_check: bool = False):
+    if imported_check:
+        result_payload = {**result_payload, "rows": _imported_check_rows(config, result_payload.get("rows", []))}
+    errors = validate_transaction_dates(config, result_payload.get("rows", []), imported_check)
     if errors:
         raise ValueError(str(errors[0]["message"]) + " Recalculate the statement before exporting.")
     opening_business_date = parse_iso_date(str(result_payload.get("opening_business_date") or resolve_business_day(config.start_date, config.holiday_dates).isoformat()))
@@ -2751,11 +2789,11 @@ def build_export_input(payload: dict[str, object], user_id: int | None = None):
     if not isinstance(form, dict):
         raise ValueError("Export request is missing config data.")
     generated_seed = payload.get("generated_seed")
-    forced_seed = int(str(generated_seed)) if str(generated_seed).strip() else None
+    forced_seed = int(str(generated_seed)) if generated_seed is not None and str(generated_seed).strip() else None
     config = build_config(form, forced_seed=forced_seed, user_id=user_id)
     result_payload = payload.get("result_payload")
     if isinstance(result_payload, dict):
-        result = hydrate_result_payload(config, result_payload)
+        result = hydrate_result_payload(config, result_payload, payload.get("source_type") == "imported")
     else:
         result = generate_statement(config)
 
@@ -2771,7 +2809,7 @@ def build_export_input(payload: dict[str, object], user_id: int | None = None):
             exchange_rate = resolve_exchange_rate(result.issue_date, mode="manual", manual_rate=manual_rate, rate_type=rate_type)
         else:
             raise
-    export_payload = build_payload(config, result, exchange_rate)
+    export_payload = build_payload(config, result, exchange_rate, payload.get("source_type") == "imported")
     return config, result, exchange_rate, export_payload
 
 
@@ -3198,10 +3236,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
             if route == "/api/bootstrap":
                 current_user = self._require_user()
                 defaults = bootstrap_defaults(current_user)
-                try:
-                    live_rate = resolve_exchange_rate(date.today(), mode="auto", manual_rate=None, rate_type="sell", timeout=5)
-                except Exception:
-                    live_rate = None
+                live_rate = None  # Rates load after the authenticated workspace is ready.
                 payload = {
                     "current_user": current_user.as_payload(),
                     "defaults": defaults,
@@ -3582,7 +3617,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
                 finally:
                     shutil.rmtree(temp_dir, ignore_errors=True)
 
-                form_payload = imported["form_values"]
+                form_payload = check_form(imported["form_values"], current_user)
                 config = build_config(form_payload, user_id=current_user.id)
                 imported_rows = imported["edited_rows"]
                 validation_errors = validate_edited_statement(config, imported_rows, imported_check=True)
@@ -3617,6 +3652,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
                     last_row = edited_rows[-1] if isinstance(edited_rows[-1], dict) else {}
                     if float(last_row.get("debit", 0) or 0) > 0 or float(last_row.get("credit", 0) or 0) > 0:
                         form_payload["closing_row_mode"] = "transaction_allowed"
+                form_payload = check_form(form_payload, current_user)
                 config = build_config(form_payload, user_id=current_user.id)
                 source_type = str(payload.get("source_type", "edited")).strip() or "edited"
                 result = recalculate_edited_statement(config, edited_rows, imported_check=source_type == "imported")
@@ -3654,6 +3690,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
                     last_row = edited_rows[-1] if isinstance(edited_rows[-1], dict) else {}
                     if float(last_row.get("debit", 0) or 0) > 0 or float(last_row.get("credit", 0) or 0) > 0:
                         form_payload["closing_row_mode"] = "transaction_allowed"
+                form_payload = check_form(form_payload, current_user)
                 config = build_config(form_payload, user_id=current_user.id)
                 imported_check = payload.get("source_type") == "imported"
                 errors = validate_transaction_dates(config, edited_rows, imported_check) if payload.get("dates_only") is True else validate_edited_statement(config, edited_rows, imported_check)
@@ -3685,6 +3722,16 @@ class StatementWebHandler(BaseHTTPRequestHandler):
                 )
                 auth_store().log_activity(current_user.id, current_user.username, "create_user", f"Created user {created_user.username}.")
                 self._send_json({"created_user": created_user.as_payload(), "users": auth_store().list_users()})
+                return
+
+            if route == "/api/update_user_details":
+                current_user = self._require_admin()
+                payload = self._read_json_body()
+                if not auth_store().verify_user_password(current_user.id, str(payload.get("admin_password", ""))):
+                    raise PermissionError("Enter your admin password to update a user.")
+                updated_user = auth_store().update_user_details(int(payload.get("user_id", 0) or 0), current_user.id, payload)
+                auth_store().log_activity(current_user.id, current_user.username, "update_user_details", f"Updated details or status for {updated_user.username}.")
+                self._send_json({"updated_user": updated_user.as_payload(), "users": auth_store().list_users()})
                 return
 
             if route == "/api/update_user_access":
@@ -3819,6 +3866,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
         export_kind = str(payload.get("export_kind", "")).strip()
         export_mode = str(payload.get("export_mode", "")).strip()
         preview_html = bool(payload.get("print_preview_html"))
+        include_letterhead = bool(payload.get("include_letterhead")) and not preview_html
         if export_kind not in {"statement", "certificate"}:
             raise ValueError("Export kind must be statement or certificate.")
         if export_mode not in {"template", "normal"}:
@@ -3845,7 +3893,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
             suffix = selected.path.suffix
 
         filename = default_output_name(export_kind, config.customer_name, template_name or "normal", result.issue_date, suffix)
-        if export_mode == "normal":
+        if export_mode == "normal" and not include_letterhead:
             self._send_download(sample_html(body.decode("utf-8")).encode("utf-8"), filename)
             return
 
@@ -3854,9 +3902,18 @@ class StatementWebHandler(BaseHTTPRequestHandler):
         temp_dir.mkdir(parents=True, exist_ok=True)
         try:
             output_path = temp_dir / filename
-            source_path = editable_office_copy(selected.path)
-            working_output = output_path.with_suffix(source_path.suffix)
-            exporter(source_path, working_output, export_payload)
+            if include_letterhead and export_mode == "normal":
+                working_output = output_path.with_suffix(".xlsx" if export_kind == "statement" else ".docx")
+                (export_normal_statement if export_kind == "statement" else export_normal_certificate)(working_output, export_payload)
+            else:
+                source_path = editable_office_copy(selected.path)
+                working_output = output_path.with_suffix(source_path.suffix)
+                exporter(source_path, working_output, export_payload)
+            if include_letterhead:
+                settings = load_letterhead(APP_ROOT / 'letterheads', current_user.id, export_kind, template_name)
+                embed_letterhead(working_output, settings)
+                self._send_download(working_output.read_bytes(), working_output.name)
+                return
             if working_output != output_path and not preview_html:
                 convert_office(working_output, output_path)
             if preview_html:

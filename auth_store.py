@@ -62,6 +62,8 @@ class AuthUser:
     mobile_number: str = ""
     email: str = ""
     gender: str = ""
+    is_hidden: bool = False
+    is_blocked: bool = False
 
     @property
     def is_admin(self) -> bool:
@@ -77,7 +79,7 @@ class AuthUser:
 
     @property
     def can_use_statements(self) -> bool:
-        return not self.is_admin
+        return not self.is_blocked
 
     def as_payload(self) -> dict[str, object]:
         return {
@@ -100,6 +102,8 @@ class AuthUser:
             "mobile_number": self.mobile_number,
             "email": self.email,
             "gender": self.gender,
+            "is_hidden": self.is_hidden,
+            "is_blocked": self.is_blocked,
         }
 
 
@@ -167,6 +171,8 @@ class AuthStore:
             self._ensure_column(connection, "users", "address", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(connection, "users", "mobile_number", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(connection, "users", "email", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(connection, "users", "is_hidden", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(connection, "users", "is_blocked", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(connection, "users", "gender", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(connection, "auth_tokens", "device_id", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(connection, "statements", "updated_at", "TEXT NOT NULL DEFAULT ''")
@@ -263,6 +269,8 @@ class AuthStore:
             mobile_number=str(row["mobile_number"]) if "mobile_number" in row.keys() else "",
             email=str(row["email"]) if "email" in row.keys() else "",
             gender=str(row["gender"]) if "gender" in row.keys() else "",
+            is_hidden=bool(row["is_hidden"]) if "is_hidden" in row.keys() else False,
+            is_blocked=bool(row["is_blocked"]) if "is_blocked" in row.keys() else False,
         )
 
     def _normalize_device_id(self, device_id: str) -> str:
@@ -314,9 +322,7 @@ class AuthStore:
         return normalized_mode, normalized_remaining, normalized_valid_until
 
     def _ensure_statement_allowed(self, user: AuthUser) -> None:
-        if user.is_admin:
-            raise PermissionError("Admin accounts can manage users only. Use a Super Admin or User account for statement work.")
-        if user.is_super_admin:
+        if user.is_admin or user.is_super_admin:
             return
         if user.access_mode == "check_only":
             raise PermissionError("This user can only import and check statements. Please contact the admin for generation access.")
@@ -386,7 +392,7 @@ class AuthStore:
                 """
                 SELECT users.id, users.username, users.password_hash, users.role, users.created_at,
                        users.access_mode, users.remaining_statements, users.valid_until, users.device_limit, users.generated_statement_count,
-                       users.full_name, users.address, users.mobile_number, users.email, users.gender
+                       users.full_name, users.address, users.mobile_number, users.email, users.gender, users.is_hidden, users.is_blocked
                 FROM users
                 WHERE username = ?
                 """,
@@ -394,6 +400,8 @@ class AuthStore:
             ).fetchone()
             if row is None or not verify_password_hash(password, str(row["password_hash"])):
                 raise ValueError("Invalid username or password.")
+            if row["is_blocked"]:
+                raise PermissionError("This account is blocked. Contact the administrator.")
             self._register_device_or_throw(connection, row, device_id, device_label)
             token = uuid4().hex
             connection.execute(
@@ -406,7 +414,7 @@ class AuthStore:
                     """
                     SELECT users.id, users.username, users.role, users.created_at,
                            users.access_mode, users.remaining_statements, users.valid_until, users.device_limit, users.generated_statement_count,
-                           users.full_name, users.address, users.mobile_number, users.email, users.gender,
+                           users.full_name, users.address, users.mobile_number, users.email, users.gender, users.is_hidden, users.is_blocked,
                            COUNT(devices.id) AS active_device_count
                     FROM users
                     LEFT JOIN devices ON devices.user_id = users.id
@@ -434,7 +442,7 @@ class AuthStore:
                 """
                 SELECT users.id, users.username, users.role, users.created_at,
                        users.access_mode, users.remaining_statements, users.valid_until, users.device_limit, users.generated_statement_count,
-                       users.full_name, users.address, users.mobile_number, users.email, users.gender,
+                       users.full_name, users.address, users.mobile_number, users.email, users.gender, users.is_hidden, users.is_blocked,
                        COUNT(devices.id) AS active_device_count
                 FROM auth_tokens
                 JOIN users ON users.id = auth_tokens.user_id
@@ -448,7 +456,7 @@ class AuthStore:
 
     def require_user(self, token: str) -> AuthUser:
         user = self.user_for_token(token)
-        if user is None:
+        if user is None or user.is_blocked:
             raise PermissionError("Please log in first.")
         return user
 
@@ -545,7 +553,7 @@ class AuthStore:
                 """
                 SELECT users.id, users.username, users.role, users.created_at,
                        users.access_mode, users.remaining_statements, users.valid_until, users.device_limit, users.generated_statement_count,
-                       users.full_name, users.address, users.mobile_number, users.email, users.gender,
+                       users.full_name, users.address, users.mobile_number, users.email, users.gender, users.is_hidden, users.is_blocked,
                        COUNT(devices.id) AS active_device_count
                 FROM users
                 LEFT JOIN devices ON devices.user_id = users.id
@@ -559,6 +567,39 @@ class AuthStore:
             raise ValueError("Could not create the user.")
         return user
 
+    def update_user_details(self, target_user_id: int, acting_user_id: int, details: dict) -> AuthUser:
+        with self._lock, self._connect() as connection:
+            actor = connection.execute("SELECT role, is_blocked FROM users WHERE id = ?", (acting_user_id,)).fetchone()
+            if actor is None or actor["role"] != "admin" or actor["is_blocked"]:
+                raise PermissionError("Only the admin account can modify users.")
+            row = connection.execute("SELECT * FROM users WHERE id = ?", (target_user_id,)).fetchone()
+            if row is None:
+                raise ValueError("Select an existing user.")
+            updates = {}
+            for key in ("full_name", "address", "mobile_number", "email", "gender"):
+                if key in details:
+                    value = str(details[key]).strip()
+                    limit = {"mobile_number": 80, "gender": 40}.get(key, 255)
+                    if len(value.encode("utf-8")) > limit:
+                        raise ValueError(f"The {key} field must be at most {limit} bytes.")
+                    updates[key] = value
+            for key in ("is_hidden", "is_blocked"):
+                if key in details:
+                    if not isinstance(details[key], bool):
+                        raise ValueError("User status must be true or false.")
+                    if details[key] and (target_user_id == acting_user_id or row["role"] == "admin"):
+                        raise PermissionError("The administrator account cannot be hidden or blocked.")
+                    updates[key] = int(details[key])
+            if updates:
+                columns = ", ".join(f"{key} = ?" for key in updates)
+                connection.execute(f"UPDATE users SET {columns} WHERE id = ?", (*updates.values(), target_user_id))
+                if updates.get("is_blocked"):
+                    connection.execute("DELETE FROM auth_tokens WHERE user_id = ?", (target_user_id,))
+                connection.commit()
+            user = self._row_to_user(connection.execute("SELECT * FROM users WHERE id = ?", (target_user_id,)).fetchone())
+        assert user is not None
+        return user
+
     def update_user_password(self, target_user_id: int, new_password: str) -> AuthUser:
         if len(new_password) < 6:
             raise ValueError("New password must be at least 6 characters.")
@@ -567,7 +608,7 @@ class AuthStore:
                 """
                 SELECT users.id, users.username, users.role, users.created_at,
                        users.access_mode, users.remaining_statements, users.valid_until, users.device_limit, users.generated_statement_count,
-                       users.full_name, users.address, users.mobile_number, users.email, users.gender
+                       users.full_name, users.address, users.mobile_number, users.email, users.gender, users.is_hidden, users.is_blocked
                 FROM users
                 WHERE id = ?
                 """,
@@ -605,7 +646,7 @@ class AuthStore:
                 """
                 SELECT users.id, users.username, users.role, users.created_at,
                        users.access_mode, users.remaining_statements, users.valid_until, users.device_limit, users.generated_statement_count,
-                       users.full_name, users.address, users.mobile_number, users.email, users.gender
+                       users.full_name, users.address, users.mobile_number, users.email, users.gender, users.is_hidden, users.is_blocked
                 FROM users
                 WHERE id = ?
                 """,
@@ -622,7 +663,7 @@ class AuthStore:
                 """
                 SELECT users.id, users.username, users.role, users.created_at,
                        users.access_mode, users.remaining_statements, users.valid_until, users.device_limit, users.generated_statement_count,
-                       users.full_name, users.address, users.mobile_number, users.email, users.gender,
+                       users.full_name, users.address, users.mobile_number, users.email, users.gender, users.is_hidden, users.is_blocked,
                        COUNT(devices.id) AS active_device_count
                 FROM users
                 LEFT JOIN devices ON devices.user_id = users.id
@@ -642,7 +683,7 @@ class AuthStore:
                 """
                 SELECT users.id, users.username, users.role, users.created_at,
                        users.access_mode, users.remaining_statements, users.valid_until, users.device_limit, users.generated_statement_count,
-                       users.full_name, users.address, users.mobile_number, users.email, users.gender
+                       users.full_name, users.address, users.mobile_number, users.email, users.gender, users.is_hidden, users.is_blocked
                 FROM users
                 WHERE id = ?
                 """,
@@ -671,7 +712,7 @@ class AuthStore:
                 """
                 SELECT users.id, users.username, users.role, users.created_at,
                        users.access_mode, users.remaining_statements, users.valid_until, users.device_limit, users.generated_statement_count,
-                       users.full_name, users.address, users.mobile_number, users.email, users.gender,
+                       users.full_name, users.address, users.mobile_number, users.email, users.gender, users.is_hidden, users.is_blocked,
                        COUNT(devices.id) AS active_device_count
                 FROM users
                 LEFT JOIN devices ON devices.user_id = users.id
@@ -892,7 +933,7 @@ class AuthStore:
                     """
                 SELECT users.id, users.username, users.role, users.created_at,
                            users.access_mode, users.remaining_statements, users.valid_until, users.device_limit, users.generated_statement_count,
-                           users.full_name, users.address, users.mobile_number, users.email, users.gender,
+                           users.full_name, users.address, users.mobile_number, users.email, users.gender, users.is_hidden, users.is_blocked,
                            COUNT(devices.id) AS active_device_count
                     FROM users
                     LEFT JOIN devices ON devices.user_id = users.id
@@ -987,7 +1028,7 @@ class AuthStore:
                 """
                 SELECT users.id, users.username, users.role, users.created_at,
                        users.access_mode, users.remaining_statements, users.valid_until, users.device_limit, users.generated_statement_count,
-                       users.full_name, users.address, users.mobile_number, users.email, users.gender,
+                       users.full_name, users.address, users.mobile_number, users.email, users.gender, users.is_hidden, users.is_blocked,
                        COUNT(devices.id) AS active_device_count
                 FROM users
                 LEFT JOIN devices ON devices.user_id = users.id
@@ -1222,5 +1263,4 @@ class AuthStore:
                 for row in rows
             ]
         }
-
 

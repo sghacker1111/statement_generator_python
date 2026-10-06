@@ -14,6 +14,7 @@ function fixture() {
   const rate = { name: 'interest_rate', value: '8', dispatchEvent() {} };
   const requests = [];
   const ctx = vm.createContext({
+    workspaceUI: null,
     form: { elements: { interest_rounding_places: precision, interest_rate: rate }, querySelectorAll: () => [precision, rate] },
     state: { currentStatement: { rows: [{ date: '2025-04-18' }] }, currentStatementSource: 'imported' },
     document: { getElementById: () => ({ value: 'automatic' }) },

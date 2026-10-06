@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .descriptions import compose as compose_description, profile_message
 from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
@@ -114,6 +115,13 @@ class StatementConfig:
     deposit_name_mode: str = "label_plus_name"
     withdrawal_name_mode: str = "label_plus_name"
     description_extra_text: str = ""
+    deposit_description_parts: str = ""
+    withdrawal_description_parts: str = ""
+    deposit_connector_enabled: str = "legacy"
+    withdrawal_connector_enabled: str = "legacy"
+    deposit_connector_text: str = "by"
+    withdrawal_connector_text: str = "by"
+    description_check_mode: str = "legacy"
     holiday_dates: set[date] = field(default_factory=set)
     quarter_date_overrides: dict[tuple[int, int], date] = field(default_factory=dict)
     seed: int | None = None
@@ -219,6 +227,17 @@ def _description_validation_messages(
     credit: float,
 ) -> list[tuple[str, list[str]]]:
     normalized = description.strip()
+    if config.description_check_mode != "legacy":
+        messages = []
+        if category == "interest" and (debit > 0 or credit <= 0):
+            messages.append(("Interest should be posted in the credit column only.", ["debit", "credit"]))
+        if category == "tax" and (credit > 0 or debit <= 0):
+            messages.append(("Tax should be posted in the debit column only.", ["debit", "credit"]))
+        if config.description_check_mode == "profile":
+            message = profile_message(config, category, normalized)
+            if message:
+                messages.append((message, ["description"]))
+        return messages
     if not normalized:
         return []
     flags = _description_signal_flags(config, normalized)
@@ -316,6 +335,13 @@ def _imported_check_rows(config: StatementConfig, rows: list[dict[str, object]])
             config, str(row.get("category", "")), description, debit, credit,
             index, len(rows) - 1, str(row.get("date", "")), set(),
         )
+        if category != "opening":
+            if config.description_check_mode == "profile" and index == len(rows) - 1 and debit <= 0 and credit <= 0:
+                category = "closing"
+            elif config.interest_text.strip() and description.strip().casefold() == config.interest_text.strip().casefold():
+                category = "interest"
+            elif config.tax_text.strip() and description.strip().casefold() == config.tax_text.strip().casefold():
+                category = "tax"
         result.append({**row, "category": category})
     return result
 
@@ -873,34 +899,7 @@ def _description_for_event(event: PlannedEvent, config: StatementConfig, rng: ra
         mode = config.withdrawal_name_mode
 
     name = rng.choice(names) if names else ""
-    extra = config.description_extra_text.strip()
-
-    def join_parts(parts: list[str]) -> str:
-        return " ".join(part for part in parts if part.strip()).strip()
-
-    if mode == "name_plus_label":
-        return join_parts([name, base]) or base
-    if mode == "name_only":
-        return name or base
-    if mode == "label_only":
-        return base
-    if mode == "extra_only":
-        return extra or base
-    if mode == "label_extra_name":
-        return join_parts([base, extra, name]) or base
-    if mode == "label_name_extra":
-        return join_parts([base, name, extra]) or base
-    if mode == "name_label_extra":
-        return join_parts([name, base, extra]) or base
-    if mode == "name_extra_label":
-        return join_parts([name, extra, base]) or base
-    if mode == "extra_label_name":
-        return join_parts([extra, base, name]) or base
-    if mode == "extra_name_label":
-        return join_parts([extra, name, base]) or base
-    if not name:
-        return base
-    return f"{base} by {name}"
+    return compose_description(config, event.event_type, name)
 
 
 def _count_runs(sequence: list[EventType], event_type: EventType, length: int) -> int:
@@ -1668,7 +1667,7 @@ def validate_edited_statement(config: StatementConfig, edited_rows: list[dict[st
 
         if debit > 0 and credit > 0:
             messages.append(("A statement row cannot contain both debit and credit amounts.", ["debit", "credit"]))
-        if not (imported_check and category == "opening"):
+        if not (imported_check and category == "opening" and config.description_check_mode != "profile"):
             messages.extend(_description_validation_messages(config, category, description, debit, credit))
 
         if include_cheque_column and debit > 0 and category == "withdrawal":
@@ -1758,7 +1757,7 @@ def validate_edited_statement(config: StatementConfig, edited_rows: list[dict[st
                         f"{expected_row.category.title()} should post on {expected_row.date.isoformat()}.",
                         ["date"],
                     )
-                if str(actual_row["description"]).strip() != expected_row.description.strip():
+                if config.description_check_mode == "legacy" and str(actual_row["description"]).strip() != expected_row.description.strip():
                     add_error(
                         row_index,
                         iso_date(actual_row["date"]),

@@ -94,8 +94,9 @@ def build_payload(
     config: StatementConfig,
     result: StatementResult,
     exchange_rate: ExchangeRateResult,
+    imported_check: bool = False,
 ) -> dict:
-    errors = validate_transaction_dates(config, [asdict(row) for row in result.rows])
+    errors = validate_transaction_dates(config, [asdict(row) for row in result.rows], imported_check)
     if errors:
         raise ValueError(str(errors[0]["message"]) + " Recalculate the statement before exporting.")
 

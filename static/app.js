@@ -1,3 +1,7 @@
+import { createWorkspace } from "./workspace.js?v=20261006-workspace";
+let workspaceUI = null;
+let authBusy = false;
+let sessionEpoch = 0;
 import { createOfficeWorkspace } from "./office-workspace.js?v=20260915-office";
 const rootUrl = new URL("./", window.location.href);
 const apiUrl = (action, params = null) => {
@@ -190,25 +194,23 @@ function showFormatSaveStatus(message, type = "success") {
 }
 
 async function fetchJson(url, options = {}) {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      ...(options.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
-      ...(state.authToken ? { Authorization: `Bearer ${state.authToken}` } : {}),
-      ...(options.headers || {}),
-    },
-  });
-
-  let payload = {};
+  const epoch = sessionEpoch;
+  const background = /auto_refresh|action=profile(?:&|$)|api\/profile$/.test(url) && options.method === "POST";
+  if (!background) workspaceUI?.pending(1);
   try {
-    payload = await response.json();
-  } catch {
-    payload = {};
-  }
-  if (!response.ok) {
-    throw new Error(payload.error || "Request failed.");
-  }
-  return payload;
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        ...(options.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
+        ...(state.authToken ? { Authorization: `Bearer ${state.authToken}` } : {}),
+        ...(options.headers || {}),
+      },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (epoch !== sessionEpoch) throw new Error("The session changed. Please try again.");
+    if (!response.ok) { const error = new Error(payload.error || "Request failed."); error.status = response.status; throw error; }
+    return payload;
+  } finally { if (!background) workspaceUI?.pending(-1); }
 }
 
 function escapeHtml(value) {
@@ -362,7 +364,7 @@ function getFormValues() {
   for (const element of form.querySelectorAll("[name]")) {
     values[element.name] = element.value;
   }
-  return values;
+  return workspaceUI ? workspaceUI.values(values) : values;
 }
 
 function applyFormValues(values) {
@@ -372,6 +374,7 @@ function applyFormValues(values) {
       element.value = values[element.name];
     }
   }
+  workspaceUI?.applied(values);
   loadRoundingPercentages(values.amount_rounding_percentages);
   const interestRounding = form.elements.interest_rounding_places;
   if (interestRounding) {
@@ -526,6 +529,7 @@ function renderProfileFormats(payload) {
   const formats = Array.isArray(payload?.formats) ? payload.formats : [];
   const previousValue = profileFormatSelect.value;
   state.profileFormats = formats;
+  workspaceUI?.profiles(formats);
   profileFormatSelect.innerHTML = '<option value="">Profile Format</option>';
   for (const row of formats) {
     const name = typeof row === "string" ? row : row?.name;
@@ -557,6 +561,7 @@ function renderSummary(summary) {
 
 function renderCurrentUser(user) {
   state.currentUser = user || null;
+  workspaceUI?.user(user);
   document.body.classList.toggle("auth-locked", !user);
   logoutButton.hidden = !user;
   if (!user) {
@@ -584,7 +589,7 @@ function isAdminUser(user) {
 }
 
 function canUseStatements(user) {
-  return Boolean(user && user.can_use_statements !== false && user.role !== "admin");
+  return Boolean(user && user.can_use_statements !== false);
 }
 
 function applyRoleAccess(user) {
@@ -1165,6 +1170,7 @@ function renderPostingPayload(payload) {
 }
 
 function renderHistoryPanel(payload) {
+  workspaceUI?.history(payload);
   const history = payload?.history || [];
   const counts = payload?.counts || [];
   const selectedUsername = payload?.selected_username || "";
@@ -1210,6 +1216,7 @@ function renderHistoryPanel(payload) {
 }
 
 function populateManagedUserFields(user) {
+  workspaceUI?.managedUser(user);
   if (!user) {
     document.getElementById("manage-user-access-mode").value = "unlimited";
     document.getElementById("manage-user-remaining-statements").value = "";
@@ -1240,6 +1247,7 @@ function userMatchesManagedSearch(user, query = managedUserSearchText()) {
 }
 
 function filteredManagedUsers(users) {
+  if (!document.getElementById("show-hidden-users")?.checked) users = (users || []).filter(user => !user.is_hidden);
   const query = managedUserSearchText();
   if (!query) {
     return users || [];
@@ -1271,7 +1279,7 @@ function renderUsers(users) {
     }
     const remaining = user.remaining_statements ?? "-";
     tr.innerHTML = `
-      <td>${escapeHtml(user.username)}</td>
+      <td>${escapeHtml(user.username)}${user.is_blocked ? " · Blocked" : ""}${user.is_hidden ? " · Hidden" : ""}</td>
       <td>${escapeHtml(user.full_name || "")}</td>
       <td>${escapeHtml(user.mobile_number || "")}</td>
       <td>${escapeHtml(user.role)}</td>
@@ -3522,6 +3530,7 @@ function buildExportPayload(exportKind, exportMode, templateName = "") {
   return {
     export_kind: exportKind,
     export_mode: exportMode,
+    include_letterhead: Boolean(document.getElementById("export-with-letterhead")?.checked),
     template_name: templateName,
     template_dir: values.template_dir,
     rate_mode: values.rate_mode,
@@ -3536,6 +3545,7 @@ function buildExportPayload(exportKind, exportMode, templateName = "") {
 }
 
 async function requestDownload(payload, logLabel) {
+  const requestEpoch = sessionEpoch;
   const response = await fetch(apiUrl("export"), {
     method: "POST",
     headers: {
@@ -3544,6 +3554,7 @@ async function requestDownload(payload, logLabel) {
     },
     body: JSON.stringify(payload),
   });
+  if (requestEpoch !== sessionEpoch) throw new Error("The session changed. Export cancelled.");
   if (!response.ok) {
     let data = {};
     try {
@@ -3581,6 +3592,7 @@ async function requestDownload(payload, logLabel) {
     throw new Error(data.error || "Export failed.");
   }
   const blob = await response.blob();
+  if (requestEpoch !== sessionEpoch) throw new Error("The session changed. Export cancelled.");
   const header = response.headers.get("Content-Disposition") || "";
   const match = /filename="([^"]+)"/i.exec(header);
   const fileName = match ? match[1] : "statement-output";
@@ -3596,6 +3608,7 @@ async function requestDownload(payload, logLabel) {
 }
 
 async function requestExportBlobForPrint(payload) {
+  const requestEpoch = sessionEpoch;
   const response = await fetch(apiUrl("export"), {
     method: "POST",
     headers: {
@@ -3604,6 +3617,7 @@ async function requestExportBlobForPrint(payload) {
     },
     body: JSON.stringify(payload),
   });
+  if (requestEpoch !== sessionEpoch) throw new Error("The session changed. Export cancelled.");
   if (!response.ok) {
     let data = {};
     try {
@@ -4014,8 +4028,9 @@ function getDeviceRegistration() {
 }
 
 async function saveDraftProfile(silent = true) {
+  if (!state.currentUser || workspaceUI?.isChecking()) return;
   const profile = getProfileDraftValues();
-  localStorage.setItem(profileStorageKey, JSON.stringify(profile));
+  localStorage.setItem(`${profileStorageKey}:${state.currentUser.id}`, JSON.stringify(profile));
   await fetchJson(apiUrl("profile"), {
     method: "POST",
     body: JSON.stringify({ profile }),
@@ -4026,7 +4041,7 @@ async function saveDraftProfile(silent = true) {
 }
 
 function scheduleAutoProfileSave() {
-  if (state.suppressAutoProfileSave) {
+  if (state.suppressAutoProfileSave || workspaceUI?.isChecking() || !state.currentUser) {
     return;
   }
   if (state.autoSaveTimer) {
@@ -4094,6 +4109,7 @@ async function deleteProfileFormat() {
 }
 
 async function loadProfileFormat() {
+  if (workspaceUI?.isChecking()) workspaceUI.navigate("profiles");
   const name = profileFormatSelect.value;
   if (!name) {
     throw new Error("Select a saved profile format first.");
@@ -4116,46 +4132,59 @@ async function runSelfTests() {
 }
 
 async function login() {
-  const username = document.getElementById("login-username").value.trim();
-  const password = document.getElementById("login-password").value;
-  const device = getDeviceRegistration();
-  const payload = await fetchJson(apiUrl("login"), {
-    method: "POST",
-    body: JSON.stringify({ username, password, device_id: device.device_id, device_label: device.device_label }),
-  });
-  state.authToken = payload.token;
-  localStorage.setItem(authStorageKey, payload.token);
-  renderCurrentUser(payload.user);
-  loginError.textContent = "";
-  document.getElementById("login-password").value = "";
-  setLoginVisible(false);
-  await bootstrap();
-  appendLog(`Logged in as ${payload.user.username}.`);
+  if (authBusy) return;
+  authBusy = true;
+  const button = document.getElementById("login-btn");
+  button.disabled = true; button.textContent = "Signing in…";
+  try {
+    const username = document.getElementById("login-username").value.trim();
+    const password = document.getElementById("login-password").value;
+    const device = getDeviceRegistration();
+    const payload = await fetchJson(apiUrl("login"), {method:"POST", body:JSON.stringify({username,password,device_id:device.device_id,device_label:device.device_label})});
+    state.authToken = payload.token;
+    localStorage.setItem(authStorageKey, payload.token);
+    loginError.textContent = "";
+    document.getElementById("login-password").value = "";
+    await bootstrap();
+    appendLog(`Logged in as ${payload.user.username}.`);
+  } finally {authBusy = false;button.disabled = false;button.textContent = "Login";}
 }
 
 async function logout() {
+  if (authBusy) return;
+  authBusy = true;
+  const token = state.authToken;
+  const draft = !workspaceUI?.isChecking() && state.currentUser ? getProfileDraftValues() : null;
+  if (state.autoSaveTimer) clearTimeout(state.autoSaveTimer);
+  state.autoSaveTimer = null;
+  sessionEpoch++;
+  state.authToken = ""; state.currentUser = null; state.users = [];
+  state.selectedManagedUserId = "";state.selectedHistoryUserId = "";
+  state.selectedHoliday = null;state.selectedPosting = null;state.selectedDeviceId = "";
+  localStorage.removeItem(authStorageKey);
+  renderCurrentUser(null);renderActivities({activities:[]});clearCurrentStatement();
+  renderUsers([]);renderHistoryPanel({});renderProfileFormats({formats:[]});
+  workspaceUI?.reset();
+  form.reset();
+  closeInlinePrintPreview();
+  state.templateEditorDetail = null; state.templates = null; state.formatUndoStack = [];
+  templateItemSelect.replaceChildren(); templateScanSummary.textContent = "";
+  statusLog.replaceChildren();
+  document.getElementById("format-workspace-panel").hidden = true;
+  formatSheetHost.replaceChildren();
+  document.getElementById("letterhead-thumbnail").removeAttribute("src");
+  document.getElementById("letterhead-thumbnail").hidden = true;
+  setLoginVisible(true);
+  document.getElementById("login-btn").disabled = true;
   try {
-    if (state.authToken) {
-      await fetchJson(apiUrl("logout"), {
-        method: "POST",
-        body: JSON.stringify({}),
-      });
+    if (token) {
+      const options={method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(12000)};
+      if (draft) await fetch(apiUrl("profile"), {...options,body:JSON.stringify({profile:draft})}).catch(()=>null);
+      const response=await fetch(apiUrl("logout"), {...options,signal:AbortSignal.timeout(12000),body:"{}"});
+      if (!response.ok) throw new Error("Server logout failed. Your local workspace is locked; retry signing out after reconnecting.");
     }
-  } finally {
-    state.authToken = "";
-    state.currentUser = null;
-    state.users = [];
-    state.selectedManagedUserId = "";
-    state.selectedHistoryUserId = "";
-    state.selectedHoliday = null;
-    state.selectedPosting = null;
-    state.selectedDeviceId = "";
-    localStorage.removeItem(authStorageKey);
-    renderCurrentUser(null);
-    renderActivities({ activities: [] });
-    clearCurrentStatement();
-    setLoginVisible(true);
-  }
+  } catch(error) {loginError.textContent=error.message || "Unable to finish server logout. Your local workspace is locked.";}
+  finally {authBusy=false;document.getElementById("login-btn").disabled=false;}
 }
 
 async function refreshHistory(selectedUserId = state.selectedHistoryUserId) {
@@ -4169,6 +4198,7 @@ async function loadStatementDetail(statementId) {
   const payload = await fetchJson(apiUrl("statement_detail", { id: statementId }), {
     method: "GET",
   });
+  workspaceUI?.navigate(payload.source_type === "imported" ? "check" : "generate", true);
   setCurrentStatement(payload.config, { ...payload.result, statement_id: payload.id, source_type: payload.source_type || "generated" });
   await refreshHolidayRows(state.holidayView);
   await refreshPostingDates();
@@ -4360,6 +4390,8 @@ async function importStatementFile(file) {
   if (!file) {
     throw new Error("Select an Excel statement file first.");
   }
+  workspaceUI?.prepareImport();
+  await requestImportedInterestRateAndRecheck(true);
   const body = new FormData();
   body.append("statement_file", file);
   body.append("config", JSON.stringify(getFormValues()));
@@ -4380,11 +4412,10 @@ async function importStatementFile(file) {
   const report = payload.import_report || {};
   const issueCount = (payload.validation_errors || []).length;
   appendLog(`Imported ${report.row_count || 0} rows. ${issueCount ? `Found ${issueCount} issue(s) for review.` : "No row errors were found."}`, issueCount ? "error" : "info");
-  await requestImportedInterestRateAndRecheck();
 }
 
-async function requestImportedInterestRateAndRecheck() {
-  if (!state.currentStatement || state.currentStatementSource !== "imported") {
+async function requestImportedInterestRateAndRecheck(beforeImport = false) {
+  if (!beforeImport && (!state.currentStatement || state.currentStatementSource !== "imported")) {
     return;
   }
   let rateText = "";
@@ -4399,11 +4430,13 @@ async function requestImportedInterestRateAndRecheck() {
       },
     );
   } catch (error) {
+    if (beforeImport) throw new Error("Import cancelled. No file was imported.");
     appendLog("Interest rate entry was cancelled. Statement is imported, but interest/tax checking still uses the current rate.", "error");
     return;
   }
   const parsedRate = Number(rateText);
-  if (!Number.isFinite(parsedRate) || parsedRate < 0 || parsedRate > 100) {
+  if (!String(rateText).trim() || !Number.isFinite(parsedRate) || parsedRate < 0 || parsedRate > 100) {
+    if (beforeImport) throw new Error("Enter an interest rate between 0 and 100 before importing.");
     appendLog("Invalid interest rate. Enter a value between 0 and 100, then click Check Statement again.", "error");
     return;
   }
@@ -4412,6 +4445,7 @@ async function requestImportedInterestRateAndRecheck() {
     form.elements.interest_rate.dispatchEvent(new Event("input", { bubbles: true }));
     form.elements.interest_rate.dispatchEvent(new Event("change", { bubbles: true }));
   }
+  if (beforeImport) return;
   await validateCurrentStatement();
   appendLog(`Imported statement checked with ${parsedRate}% interest rate and each full interval rounded once to 2 decimal places (Half Up).`);
 }
@@ -4474,8 +4508,11 @@ async function bootstrap() {
   clearCurrentStatement();
   closeProfileFormatEditor();
   setLoginVisible(false);
-  appendLog("Ready. Generate, import, edit, and export statements from the same screen.");
+  workspaceUI?.reset(payload.defaults);
+  appendLog("Ready. Select a workspace from the left navigation.");
+  const refreshEpoch = sessionEpoch;
   globalThis.setTimeout(() => {
+    if (refreshEpoch !== sessionEpoch) return;
     autoRefreshInternetData().catch((error) => appendLog(error.message, "error"));
   }, 0);
 }
@@ -4510,6 +4547,8 @@ function bindEvents() {
   document.getElementById("logout-btn").addEventListener("click", async () => {
     await logout();
   });
+
+  for (const id of ["login-username", "login-password"]) document.getElementById(id).addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); document.getElementById("login-btn").click(); } });
 
   loginPasswordToggle?.addEventListener("click", () => setPasswordInputVisibility(loginPasswordInput, loginPasswordToggle));
   passwordModalToggle?.addEventListener("click", () => setPasswordInputVisibility(passwordModalInput, passwordModalToggle));
@@ -5397,11 +5436,23 @@ function bindEvents() {
   }
 }
 
+workspaceUI = createWorkspace({
+  state, apiUrl, fetchJson, requestPassword, setTab, getValues:getFormValues, applyValues:applyFormValues,
+  clearStatement:clearCurrentStatement, saveDraft:saveDraftProfile, scheduleSave:scheduleAutoProfileSave,
+  renderUsers, log:appendLog,
+  renderStatement() {
+    renderSummary(state.currentStatement?.summary || {});
+    renderPreviewRows(state.statementEditMode ? state.editableRows : (state.currentStatement?.rows || []));
+    renderValidationResults(state.validationErrors || []);updatePreviewControls();
+  },
+});
+
 bindEvents();
 if (state.authToken) {
   bootstrap().catch(async (error) => {
     appendLog(error.message, "error");
-    await logout();
+    if (error.status === 401 || error.status === 403) await logout();
+    else { setLoginVisible(true); loginError.textContent = "Unable to load the workspace. Please sign in to retry."; }
   });
 } else {
   setLoginVisible(true);
