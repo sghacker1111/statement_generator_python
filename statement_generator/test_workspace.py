@@ -13,6 +13,29 @@ from . import test_import_checks as imported
 
 
 class WorkspaceTests(TestCase):
+    def test_description_check_scopes_ignore_names_and_validate_the_amount_side(self):
+        from types import SimpleNamespace
+        from dataclasses import asdict
+        config = SimpleNamespace(**asdict(imported.ImportCheckTests().config()))
+        config.deposit_text = 'Cash Deposit'
+        config.withdrawal_text = 'Cash Withdraw'
+        config.description_extra_text = 'Branch Transfer'
+        config.deposit_description_parts = '["label","name","extra"]'
+        config.withdrawal_description_parts = '["label","name","extra"]'
+        for scope in ('labels', 'labels_extra'):
+            config.description_check_scope = scope
+            for side, label in [('deposit', 'Cash Deposit'), ('withdrawal', 'Cash Withdraw')]:
+                other = 'Cash Withdraw' if side == 'deposit' else 'Cash Deposit'
+                for text in (f'Branch Transfer: {label} BY: A Different Person / reference 123',
+                             f'{label.lower()}   Branch   Transfer', f'{label}: Branch Transfer / Another Name'):
+                    self.assertEqual(profile_message(config, side, text), '', (scope, text))
+                self.assertTrue(profile_message(config, side, f'{other} Branch Transfer Person'))
+                self.assertTrue(profile_message(config, side, f'{label} {other} Branch Transfer'))
+                self.assertTrue(profile_message(config, side, f'{label}ed Branch Transfer'))
+                self.assertEqual(bool(profile_message(config, side, f'{label} Random Name')), scope == 'labels_extra')
+        config.description_check_scope = 'labels'
+        self.assertTrue(profile_message(config, 'interest', 'Wrong posting text'))
+
     def test_description_orders_connectors_and_legacy(self):
         config = replace(imported.ImportCheckTests().config(), deposit_name_mode='name_plus_label', deposit_text='Cash Deposit', description_extra_text='Reference')
         self.assertEqual(compose(config, 'deposit', 'Samir'), 'Samir Cash Deposit')  # existing default Name + Label
@@ -31,6 +54,27 @@ class WorkspaceTests(TestCase):
             self.assertTrue(profile_message(config, 'deposit', 'Cash Deposit Wrong Samir'))
         for value in ('[]', '["none"]', '["name","name"]', '[["name"]]', '[2]', 'invalid'):
             with self.assertRaises(ValueError): parts(value)
+
+    def test_imported_description_options_use_debit_credit_and_keep_system_checks(self):
+        fixture = imported.ImportCheckTests()
+        rows = fixture.posting_rows()
+        rows[1]['description'] = 'Branch Ref / Transfer in BY: A New Name'
+        rows[2]['description'] = 'Different Name Transfer out Branch Ref'
+        for mode in ('basic', 'profile'):
+            config = replace(fixture.config(), description_check_mode=mode, description_check_scope='labels_extra',
+                             first_date_description='Opening Balance', last_date_description='Balance C/F',
+                             deposit_text='Transfer in', withdrawal_text='Transfer out', description_extra_text='Branch Ref',
+                             interest_text='Interest', tax_text='Tax')
+            self.assertEqual(validate_edited_statement(config, rows, True), [])
+            for index, wrong in ((1, 'Transfer out'), (2, 'Transfer in')):
+                changed = [dict(row) for row in rows]
+                changed[index].update(description=wrong + ' Branch Ref', category='deposit')
+                errors = validate_edited_statement(config, changed, True)
+                self.assertTrue(any(e['row_index'] == index and 'description' in e['fields'] for e in errors), errors)
+            changed = [dict(row) for row in rows]
+            changed[1]['description'] = 'Transfer in Any Name'
+            self.assertTrue(any(e['row_index'] == 1 and 'description' in e['fields'] for e in validate_edited_statement(config, changed, True)))
+            self.assertEqual(validate_edited_statement(replace(config, description_check_scope='labels'), changed, True), [])
 
     def test_normal_check_ignores_wording_profile_check_enforces_it(self):
         fixture=imported.ImportCheckTests(); rows=fixture.posting_rows()
@@ -71,13 +115,19 @@ class WorkspaceTests(TestCase):
         with TemporaryDirectory() as temp:
             store=AuthStore(Path(temp)/'users.db')
             user=store.create_user('checker','temporary-password','user','unlimited',full_name='Checker',mobile_number='000000')
-            store.save_profile_format(user,'Existing',{'deposit_text':'Saved deposit','first_date_description':'Carry in','opening_balance':'999','interest_rate':'12'})
+            store.save_profile_format(user,'Existing',{'deposit_text':'Saved deposit','description_extra_text':'Saved reference','first_date_description':'Carry in','opening_balance':'999','interest_rate':'12'})
             with patch.object(web,'AUTH_STORE',store):
                 checked=web.check_form({'statement_check_mode':'profile','check_profile_name':'Existing','opening_balance':'123','interest_rate':'7','deposit_text':'Tampered'},user)
                 self.assertEqual(checked['deposit_text'],'Saved deposit')
                 self.assertEqual(checked['opening_balance'],'123')
                 self.assertEqual(checked['interest_rate'],'7')
                 self.assertEqual(checked['deposit_connector_enabled'],'legacy')
+                self.assertEqual(checked['description_check_scope'],'labels')
+                checked=web.check_form({'statement_check_mode':'profile','check_profile_name':'Existing','description_check_scope':'labels_extra','description_extra_text':'Tampered'},user)
+                self.assertEqual(checked['description_check_scope'],'labels_extra')
+                self.assertEqual(checked['description_extra_text'],'Saved reference')
+                with self.assertRaises(ValueError):web.check_form({'statement_check_mode':'new','description_check_scope':'invalid'},user)
+                with self.assertRaises(ValueError):web.check_form({'statement_check_mode':'new','description_check_scope':'labels_extra','description_extra_text':''},user)
                 with self.assertRaises(ValueError):web.check_form({'statement_check_mode':'profile'},user)
                 other=store.create_user('other','temporary-password','user','unlimited',full_name='Other',mobile_number='000000')
                 with self.assertRaises(ValueError):web.check_form({'statement_check_mode':'profile','check_profile_name':'Existing'},other)

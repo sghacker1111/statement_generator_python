@@ -122,6 +122,7 @@ class StatementConfig:
     deposit_connector_text: str = "by"
     withdrawal_connector_text: str = "by"
     description_check_mode: str = "legacy"
+    description_check_scope: str = ""
     holiday_dates: set[date] = field(default_factory=set)
     quarter_date_overrides: dict[tuple[int, int], date] = field(default_factory=dict)
     seed: int | None = None
@@ -233,8 +234,10 @@ def _description_validation_messages(
             messages.append(("Interest should be posted in the credit column only.", ["debit", "credit"]))
         if category == "tax" and (credit > 0 or debit <= 0):
             messages.append(("Tax should be posted in the debit column only.", ["debit", "credit"]))
-        if config.description_check_mode == "profile":
-            message = profile_message(config, category, normalized)
+        side = "deposit" if credit > 0 and debit <= 0 else "withdrawal" if debit > 0 and credit <= 0 else category
+        customer_scope = category in {"deposit", "withdrawal"} and config.description_check_scope in {"labels", "labels_extra"}
+        if config.description_check_mode == "profile" or customer_scope:
+            message = profile_message(config, side if customer_scope else category, normalized)
             if message:
                 messages.append((message, ["description"]))
         return messages

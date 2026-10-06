@@ -2616,6 +2616,7 @@ def build_config(form_data: dict[str, object], forced_seed: int | None = None, u
         description_extra_text=text("description_extra_text"),
         **{key: text(key) for key in DESCRIPTION_FIELDS},
         description_check_mode=text("description_check_mode") if text("description_check_mode") in {"basic", "profile"} else "legacy",
+        description_check_scope=text("description_check_scope") if text("description_check_scope") in {"labels", "labels_extra"} else "",
         interest_text=text("interest_text"),
         tax_text=text("tax_text"),
         date_column_mode=text("date_column_mode").lower() if text("date_column_mode").lower() in {"single", "txn_value"} else "single",
@@ -2644,6 +2645,9 @@ def check_form(form: dict[str, object], user: AuthUser) -> dict[str, object]:
         raise ValueError("Choose a new statement or saved profile check.")
     form = dict(form)
     form["description_check_mode"] = "profile" if mode == "profile" else "basic"
+    form["description_check_scope"] = form.get("description_check_scope", "labels")
+    if form["description_check_scope"] not in {"labels", "labels_extra"}:
+        raise ValueError("Select Only Deposit and Withdraw Text or With Extra Text.")
     if mode == "profile":
         name = str(form.get("check_profile_name", "")).strip()
         if not name:
@@ -2652,6 +2656,8 @@ def check_form(form: dict[str, object], user: AuthUser) -> dict[str, object]:
         defaults = default_form_values()
         for field in DESCRIPTION_CHECK_FIELDS:
             form[field] = saved.get(field, defaults.get(field, ""))
+    if form["description_check_scope"] == "labels_extra" and not str(form.get("description_extra_text", "")).strip():
+        raise ValueError("Enter Extra Text, or choose Only Deposit and Withdraw Text. For a saved profile, add Extra Text to that profile first.")
     return form
 
 

@@ -7,7 +7,19 @@ const root=path.resolve(__dirname,'..');
 const assets=fs.existsSync(path.join(root,'assets'))?'assets':'static';
 const source=fs.readFileSync(path.join(root,assets,'workspace.js'),'utf8');
 const ctx=vm.createContext({Date,JSON});
-vm.runInContext(source.replaceAll('export ','')+'\nthis.api={descriptionParts,dashboardSeries};',ctx);
+vm.runInContext(source.replaceAll('export ','')+'\nthis.api={descriptionParts,dashboardSeries,checkingValues};',ctx);
+test('checking description options persist in check requests and never affect generation',()=>{
+  for(const scope of ['labels','labels_extra']){
+    const values=ctx.api.checkingValues({deposit_text:'Deposit',description_extra_text:'Reference'},true,'profile','Existing',scope);
+    assert.equal(values.description_check_scope,scope);
+    assert.equal(values.check_profile_name,'Existing');
+    assert.equal(values.description_extra_text,'Reference');
+    const generated=ctx.api.checkingValues({...values,description_check_mode:'profile'},false,'profile','Existing',scope);
+    for(const key of ['description_check_scope','statement_check_mode','check_profile_name','description_check_mode'])assert.ok(!(key in generated));
+    assert.equal(generated.deposit_text,'Deposit');
+    assert.equal(values.description_check_scope,scope); // Do not mutate the checking draft.
+  }
+});
 test('legacy description ordering and explicit slot combinations stay distinct',()=>{
   assert.equal(JSON.stringify(ctx.api.descriptionParts('', 'extra_name')),'["extra","name"]');
   assert.equal(JSON.stringify(ctx.api.descriptionParts('["name","label","none"]','label_plus_name')),'["name","label","none"]');

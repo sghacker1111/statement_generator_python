@@ -10,6 +10,13 @@ export function descriptionParts(raw, mode) {
   if (raw) { try { const parts = JSON.parse(raw); if (Array.isArray(parts)) return parts; } catch {} }
   return DESCRIPTION_ORDERS[mode] || DESCRIPTION_ORDERS.label_plus_name;
 }
+export function checkingValues(values, checking, mode, profile, scope) {
+  const result={...values};
+  delete result.description_check_mode;
+  if(checking) return {...result,statement_check_mode:mode,check_profile_name:profile,description_check_scope:scope};
+  delete result.statement_check_mode;delete result.check_profile_name;delete result.description_check_scope;
+  return result;
+}
 export function dashboardSeries(history, period, today = new Date()) {
   const buckets = [];
   const key = d => period === 'monthly' ? `${d.getFullYear()}-${d.getMonth()}` : `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
@@ -32,7 +39,7 @@ export function createWorkspace(h) {
   const form = $('statement-form');
   const clone = value => JSON.parse(JSON.stringify(value));
   const stateKeys = ['generatedSeed','currentStatement','currentStatementId','currentStatementSource','statementEditMode','editableRows','validationErrors'];
-  let context = 'generate', view = 'home', drafts = {}, defaults = {}, history = [], period = 'weekly', requestCount = 0;
+  let context = 'generate', view = 'home', drafts = {}, defaults = {}, history = [], period = 'weekly', requestCount = 0, checkProfileRevision = 0;
   const navItems = [
     ['home','Home','Overview & recent activity'], ['generate','Statement Generation','Account, rules & descriptions'],
     ['profiles','Statement Profiles','Save and reuse your setup'], ['check','Statement Check','Import, edit & validate'],
@@ -75,7 +82,8 @@ export function createWorkspace(h) {
   profiles.insertAdjacentHTML('beforeend','<div class="workspace-shortcuts"><button type="button" class="ghost-button" data-go="generate">Edit account and rules</button><button type="button" class="ghost-button" data-tab="texts-panel">Edit descriptions and names</button></div>');
   $('export-panel').insertAdjacentHTML('afterbegin','<label class="check-field export-letterhead-toggle"><input type="checkbox" id="export-with-letterhead"> Include the selected format’s saved A4 letterhead in Excel / Word export (.xlsx / .docx)</label>');
   const check=section('check-panel','Statement Check','Import an Excel statement, select its checking rules, then review or edit the rows. Your generation draft is kept separately.');
-  check.innerHTML+=`<div class="field-grid two-col"><label class="field"><span>Checking mode</span><select id="statement-check-mode"><option value="new">New / normal statement</option><option value="profile">Saved statement profile</option></select></label><label class="field" id="check-profile-field" hidden><span>Saved profile</span><select id="check-profile-name"><option value="">Select a profile</option></select></label><label class="field"><span>Interest rate (%)</span><input id="check-interest-rate" type="number" min="0" max="100" step="0.0001" data-proxy="interest_rate"></label><label class="field"><span>Tax rate (%)</span><input id="check-tax-rate" type="number" min="0" max="100" step="0.0001" data-proxy="tax_rate"></label></div><p id="check-mode-note">Checks dates, balances, cheque numbers, interest and tax. Description wording is not restricted.</p><p class="muted">Interest: ROUND(Balance × Days × Rate / 36500, 2) per interval. Customer transactions may precede interest and tax on their posting date. An opening Balance B/F on that date carries the previous net balance.</p><div class="workspace-shortcuts"><button type="button" class="primary-button" data-click="import-statement-btn">Import Excel statement</button><button type="button" class="ghost-button" data-click="edit-statement-btn">Edit imported rows</button><button type="button" class="ghost-button" data-click="validate-statement-btn">Check statement</button><button type="button" class="ghost-button" data-tab="statement-panel">Review checking rules</button></div>`;
+  check.innerHTML+=`<div class="field-grid two-col"><label class="field"><span>Checking mode</span><select id="statement-check-mode"><option value="new">New / normal statement</option><option value="profile">Saved statement profile</option></select></label><label class="field" id="check-profile-field" hidden><span>Saved profile</span><select id="check-profile-name"><option value="">Select a profile</option></select></label><label class="field"><span>Interest rate (%)</span><input id="check-interest-rate" type="number" min="0" max="100" step="0.0001" data-proxy="interest_rate"></label><label class="field"><span>Tax rate (%)</span><input id="check-tax-rate" type="number" min="0" max="100" step="0.0001" data-proxy="tax_rate"></label></div><p id="check-mode-note">Checks dates, balances, cheque numbers, interest, tax, and deposit/withdrawal labels.</p><p class="muted">Interest: ROUND(Balance × Days × Rate / 36500, 2) per interval. Customer transactions may precede interest and tax on their posting date. An opening Balance B/F on that date carries the previous net balance.</p><div class="workspace-shortcuts"><button type="button" class="primary-button" data-click="import-statement-btn">Import Excel statement</button><button type="button" class="ghost-button" data-click="edit-statement-btn">Edit imported rows</button><button type="button" class="ghost-button" data-click="validate-statement-btn">Check statement</button><button type="button" class="ghost-button" data-tab="statement-panel">Review checking rules</button></div>`;
+  $('check-mode-note').insertAdjacentHTML('beforebegin',`<div class="field-grid two-col"><label class="field"><span>Description checking</span><select id="description-check-scope"><option value="labels">Only Deposit and Withdraw Text</option><option value="labels_extra">With Extra Text</option></select></label><label class="field"><span>Deposit Text (credit)</span><input id="check-deposit-text" data-proxy="deposit_text"></label><label class="field"><span>Withdraw Text (debit)</span><input id="check-withdrawal-text" data-proxy="withdrawal_text"></label><label class="field" id="check-extra-field" hidden><span>Extra Text</span><input id="check-extra-text" data-proxy="description_extra_text"></label></div><p class="muted">Names, connector words, and text order are ignored. Labels match whole phrases without case sensitivity. Saved profiles supply the text fields; edit the profile to change them.</p>`);
   const saved=section('history-panel','Saved Statements','Load a statement to review, edit, check or export it.');
   saved.append($('admin-counts-card'),$('history-table').closest('.inset-panel'));
   const devices=section('devices-panel','Devices & Activity','Review saved sessions and recent account activity.');
@@ -158,9 +166,25 @@ export function createWorkspace(h) {
   function syncCheck() {
     document.querySelectorAll('[data-proxy]').forEach(el=>{el.value=form.elements[el.dataset.proxy]?.value || '';});
     $('check-profile-field').hidden=$('statement-check-mode').value!=='profile';
-    $('check-mode-note').textContent=$('statement-check-mode').value==='profile'?'Also checks the saved first and last descriptions, deposit and withdrawal order, connector, extra text, interest and tax wording.':'Checks dates, balances, cheque numbers, interest and tax. Description wording is not restricted.';
+    const profile=$('statement-check-mode').value==='profile', extra=$('description-check-scope').value==='labels_extra';
+    $('check-extra-field').hidden=!extra;
+    for(const id of ['check-deposit-text','check-withdrawal-text','check-extra-text'])$(id).readOnly=profile;
+    $('check-mode-note').textContent='Checks the deposit label on credit rows and the withdrawal label on debit rows.'+(extra?' Also requires Extra Text.':' Other description text is ignored.')+(profile?' Opening, closing, interest and tax descriptions still follow the saved profile.':' Date, balance, cheque, interest and tax checks remain enabled.');
   }
-  $('statement-check-mode').onchange=syncCheck;
+  async function loadCheckingTexts() {
+    const revision=++checkProfileRevision, name=$('check-profile-name').value;
+    syncCheck();
+    if(context!=='check'||$('statement-check-mode').value!=='profile'||!name)return;
+    try {
+      const payload=await h.fetchJson(h.apiUrl('profile_formats',{name}),{method:'GET'});
+      if(revision!==checkProfileRevision||context!=='check'||$('statement-check-mode').value!=='profile'||$('check-profile-name').value!==name)return;
+      for(const key of ['deposit_text','withdrawal_text','description_extra_text'])form.elements[key].value=payload.profile?.[key]??defaults[key]??'';
+      syncCheck();
+    } catch(error) {h.log(error.message,'error');}
+  }
+  $('statement-check-mode').onchange=loadCheckingTexts;
+  $('check-profile-name').onchange=loadCheckingTexts;
+  $('description-check-scope').onchange=syncCheck;
   document.querySelectorAll('[data-proxy]').forEach(el=>el.oninput=()=>{if(form.elements[el.dataset.proxy])form.elements[el.dataset.proxy].value=el.value;});
   function switchContext(next) {
     if(context===next)return;
@@ -208,8 +232,9 @@ export function createWorkspace(h) {
   }
   return {
     navigate, isChecking:()=>context==='check', pending(delta){requestCount=Math.max(0,requestCount+delta);},
-    values(values) { if(context==='check')return {...values,statement_check_mode:$('statement-check-mode').value,check_profile_name:$('check-profile-name').value};delete values.statement_check_mode;delete values.check_profile_name;delete values.description_check_mode;return values; },
+    values(values) {return checkingValues(values,context==='check',$('statement-check-mode').value,$('check-profile-name').value,$('description-check-scope').value);},
     applied(values) {
+      if(context==='check')$('description-check-scope').value=values.description_check_scope==='labels_extra'?'labels_extra':'labels';
       if (context === "check" && values.statement_check_mode) { $("statement-check-mode").value=values.statement_check_mode; $("check-profile-name").value=values.check_profile_name || ""; }
       for(const side of ['deposit','withdrawal']) for(const [field,fallback] of Object.entries({description_parts:'',connector_enabled:'legacy',connector_text:'by'})) form.elements[`${side}_${field}`].value=values[`${side}_${field}`]??fallback;
       syncDescriptions();syncCheck();
@@ -218,7 +243,7 @@ export function createWorkspace(h) {
     history(payload){history=payload?.history||[];renderDashboard();},
     user(user){sidebar.querySelectorAll('[data-admin-nav]').forEach(el=>el.hidden=!user?.can_manage_users);},
     managedUser(user){for(const key of ['full_name','mobile_number','email','address','gender'])$(`detail-${key}`).value=user?.[key]||'';for(const key of ['is_hidden','is_blocked'])$(`detail-${key}`).checked=Boolean(user?.[key]);},
-    reset(values={}) {drafts={};defaults=clone(values);context='generate';requestCount=0; $('statement-check-mode').value='new';$('check-profile-name').value='';syncDescriptions();renderDashboard();navigate('home',true);},
+    reset(values={}) {checkProfileRevision++;$('description-check-scope').value='labels';drafts={};defaults=clone(values);context='generate';requestCount=0; $('statement-check-mode').value='new';$('check-profile-name').value='';syncDescriptions();renderDashboard();navigate('home',true);},
     prepareImport() {if(!navigate('check'))throw new Error('Wait for the current request before importing.');if($('statement-check-mode').value==='profile'&&!$('check-profile-name').value)throw new Error('Select a saved statement profile before importing.');},
   };
 }

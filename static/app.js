@@ -1,4 +1,4 @@
-import { createWorkspace } from "./workspace.js?v=20261006-workspace";
+import { createWorkspace } from "./workspace.js?v=20261006-description-check";
 let workspaceUI = null;
 let authBusy = false;
 let sessionEpoch = 0;

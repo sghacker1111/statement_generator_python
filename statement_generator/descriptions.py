@@ -66,6 +66,21 @@ def profile_message(config, category, description):
     side = "deposit" if category == "deposit" else "withdrawal" if category == "withdrawal" else ""
     if not side:
         return ""
+    scope = getattr(config, "description_check_scope", "")
+    if scope in {"labels", "labels_extra"}:
+        label = " ".join(getattr(config, side + "_text").split())
+        pattern = lambda text: r"(?<!\w)" + re.escape(text) + r"(?!\w)"
+        column = "credit" if side == "deposit" else "debit"
+        if not label or not re.search(pattern(label), normalized, re.IGNORECASE):
+            return f"{side.title()} text must appear in the description for this {column} amount: {label}."
+        other = " ".join(getattr(config, ("withdrawal" if side == "deposit" else "deposit") + "_text").split())
+        remaining = re.sub(pattern(label), " ", normalized, flags=re.IGNORECASE)
+        if other and other.casefold() != label.casefold() and re.search(pattern(other), remaining, re.IGNORECASE):
+            return f"The description contains the opposite transaction text for this {column} amount: {other}."
+        extra = " ".join(config.description_extra_text.split())
+        if scope == "labels_extra" and (not extra or not re.search(pattern(extra), normalized, re.IGNORECASE)):
+            return f"Extra Text must appear in the description: {extra}."
+        return ""
     if side == "withdrawal" and not config.include_cheque_column:
         normalized = re.sub(r"\s+CHQ\. No\. \d+$", "", normalized)
     marker = "\x00NAME\x00"
