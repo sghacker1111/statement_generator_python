@@ -4391,7 +4391,7 @@ async function requestImportedInterestRateAndRecheck() {
   try {
     rateText = await requestModalValue(
       "Imported Statement Interest Rate",
-      "Enter the interest rate used by this imported statement. Daily interest uses 2 decimal places (Half Up): if the third digit is 5 or more, increase the second digit; otherwise keep it.",
+      "Enter the interest rate used by this imported statement. Calculate Balance × Days × Rate / 36500 for each interval, then round once to 2 decimal places (Half Up). The third digit rounds up at 5 or more. Sum the rounded intervals at each interest posting.",
       {
         type: "number",
         defaultValue: form.elements.interest_rate?.value || "",
@@ -4413,7 +4413,7 @@ async function requestImportedInterestRateAndRecheck() {
     form.elements.interest_rate.dispatchEvent(new Event("change", { bubbles: true }));
   }
   await validateCurrentStatement();
-  appendLog(`Imported statement checked with ${parsedRate}% interest rate and daily interest rounded to 2 decimal places (Half Up).`);
+  appendLog(`Imported statement checked with ${parsedRate}% interest rate and each full interval rounded once to 2 decimal places (Half Up).`);
 }
 
 async function validateCurrentStatement() {

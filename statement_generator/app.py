@@ -217,7 +217,7 @@ class StatementGeneratorApp(tk.Tk):
 
         ttk.Label(parent, text="Daily Interest Rounding").grid(row=len(labels), column=0, sticky="w", pady=4)
         ttk.Label(parent, text="2 decimal places (Half Up)").grid(row=len(labels), column=1, sticky="w", pady=4)
-        ttk.Label(parent, text="Third digit 5 or more: increase the second digit; below 5: keep it. Tax uses 2 places (Half Up).").grid(row=len(labels) + 1, column=0, columnspan=2, sticky="w")
+        ttk.Label(parent, text="ROUND(Balance × Days × Rate / 36500, 2) for each interval.\nRound once after multiplying by days, then sum rounded intervals. Tax uses 2 places (Half Up).").grid(row=len(labels) + 1, column=0, columnspan=2, sticky="w")
         rounding = ttk.LabelFrame(parent, text="Transaction Counts & Rounding", padding=8)
         rounding.grid(row=len(labels) + 2, column=0, columnspan=2, sticky="ew", pady=8)
         ttk.Label(rounding, text="Debit count: 45–70% of credits; at least 13 customer transactions.\n10–20% of debits above 50,000; 20–30% of credits below 30,000.\nRandom debit groups of 1–3 and credit groups of 1–4. Interest, tax, and balance rows excluded.\nSame amount at most twice per side; exact credit maximum at most once.\nLarge credits prefer varied amounts 5,000–10,000 below the maximum when feasible.").grid(row=0, column=0, columnspan=2, sticky="w")

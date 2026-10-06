@@ -170,7 +170,7 @@
               <div class="field"><span>Daily Interest Rounding</span>
                 <span>2 decimal places (Half Up)</span>
                 <input type="hidden" name="interest_rounding_places" id="interest-rounding-places" value="2">
-                <small>Third digit 5 or more: increase the second digit; below 5: keep it. Used for creation and checking. Tax uses 2 decimal places (Half Up).</small>
+                <small>ROUND(Balance × Days × Rate / 36500, 2) for each interval between transactions or postings. Round once after multiplying by days, then sum the rounded intervals. Used for creation and checking; tax keeps 2-decimal rounding.</small>
               </div>
               <label class="field"><span>Tax Rate (%)</span><input name="tax_rate" type="number" step="0.0001"></label>
               <label class="field"><span>Cheque Start No.</span><input name="cheque_start" type="number" step="1"></label>

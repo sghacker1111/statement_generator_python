@@ -23,12 +23,47 @@ class InterestRoundingTests(unittest.TestCase):
                        opening_balance=1000, target_closing_balance=1000, interest_rate=10,
                        tax_rate=6, holiday_dates=set(), include_cheque_column=False)
 
-    def test_daily_half_up_rounds_before_multiplying_days(self):
-        # 1000 * 10 / 36500 = 0.273972... => 0.27 per day, not 0.28.
-        self.assertEqual(_segment_interest(1000, 10, 3), 0.81)
+    def test_supplied_statement_interval_interest_and_quarter_total(self):
+        intervals = [(1785943.63, 5, 1712.55), (1832943.63, 2, 703.05),
+                     (1780943.63, 21, 7172.57), (1844943.63, 5, 1769.12),
+                     (1814943.63, 29, 10094.07), (1913443.63, 21, 7706.20),
+                     (1979443.63, 10, 3796.19)]
+        for balance, days, expected in intervals:
+            with self.subTest(balance=balance, days=days):
+                self.assertEqual(_segment_interest(balance, 7, days), expected)
+        config = replace(self.config(2), start_date=date(2025, 7, 16), end_date=date(2025, 10, 17),
+                         opening_balance=1785943.63, target_closing_balance=2010420.15,
+                         interest_rate=7, tax_rate=6, first_date_description="Balance B/F:",
+                         interest_text="Interest:", tax_text="Tax:", include_cheque_column=True)
+        samples = [
+            ("2025-07-16", "Balance B/F:", 0, 0, 1785943.63, "opening"),
+            ("2025-07-21", "Deposited By: Example 1", 0, 47000, 1832943.63, "deposit"),
+            ("2025-07-23", "Withdrawn By: Example 2", 52000, 0, 1780943.63, "withdrawal"),
+            ("2025-08-13", "Deposited By: Self", 0, 64000, 1844943.63, "deposit"),
+            ("2025-08-18", "Withdrawn By: Example 3", 30000, 0, 1814943.63, "withdrawal"),
+            ("2025-09-16", "Deposited By: Example 4", 0, 98500, 1913443.63, "deposit"),
+            ("2025-10-07", "Deposited By: Example 5", 0, 66000, 1979443.63, "deposit"),
+            ("2025-10-17", "Interest:", 0, 32953.75, 2012397.38, "interest"),
+            ("2025-10-17", "Tax:", 1977.23, 0, 2010420.15, "tax"),
+            ("2025-10-17", "Balance C/F", 0, 0, 2010420.15, "closing"),
+        ]
+        rows = [dict(zip(("date", "description", "debit", "credit", "balance", "category"), row)) for row in samples]
+        rows[2]["cheque_no"] = "617943"
+        rows[4]["cheque_no"] = "617944"
+        self.assertEqual(validate_edited_statement(config, rows, imported_check=True), [])
+        result = recalculate_edited_statement(config, rows, imported_check=True)
+        self.assertEqual(result.summary.total_interest, 32953.75)
+        self.assertEqual(result.summary.total_tax, 1977.23)
+        self.assertEqual(result.final_balance, 2010420.15)
+        self.assertEqual([(row.date, row.credit) for row in result.rows if row.category == "interest"],
+                         [(date(2025, 10, 17), 32953.75)])
+
+    def test_interval_half_up_rounds_after_multiplying_days(self):
+        # 1000 * 3 * 10 / 36500 = 0.821917... => 0.82 for the interval.
+        self.assertEqual(_segment_interest(1000, 10, 3), 0.82)
         self.assertEqual(_segment_interest(1500000, 8, 1), 328.77)
         for places in (2, 4):  # Historical four-place configurations use two places.
-            self.assertEqual(_segment_interest(1000, 10, 3, places), 0.81)
+            self.assertEqual(_segment_interest(1000, 10, 3, places), 0.82)
             self.assertEqual(_segment_interest(3650, 12.3, 10, places), 12.3)
             self.assertEqual(_segment_interest(365000, 10, 93, places), 9300)
             self.assertEqual(_segment_interest(0, 10, 93, places), 0)
@@ -42,19 +77,19 @@ class InterestRoundingTests(unittest.TestCase):
                                ("12.300000001", 1.23), ("19.95", 2.00)):
             with self.subTest(rate=rate):
                 self.assertEqual(_segment_interest(3650, Decimal(rate), 1), expected)
-        self.assertEqual(_segment_interest(3650, 12.35, 3), 3.72)
+        self.assertEqual(_segment_interest(3650, 12.35, 3), 3.71)
 
     def test_checks_recalculation_and_tax_use_fixed_half_up(self):
         for places in (2, 4):
             config = self.config(places)
             result = recalculate_edited_statement(config, [])
-            # April 13 to July 16 is 94 days: 0.27 * 94 = 25.38.
-            self.assertEqual(result.summary.total_interest, 25.38)
-            self.assertEqual(result.summary.total_tax, 1.52)  # 25.38 * 6% = 1.5228.
+            # April 13 to July 16 is 94 days: round(1000 * 94 * 10 / 36500, 2).
+            self.assertEqual(result.summary.total_interest, 25.75)
+            self.assertEqual(result.summary.total_tax, 1.55)  # 25.75 * 6% = 1.545.
             rows = [asdict(row) for row in result.rows]
             for imported in (False, True):
                 self.assertEqual(validate_edited_statement(config, rows, imported), [])
-            self.assertEqual(result.final_balance, 1023.86)
+            self.assertEqual(result.final_balance, 1024.20)
 
     def test_imported_check_accepts_half_up_and_rejects_round_up_interest(self):
         for places in (2, 4):
@@ -62,19 +97,20 @@ class InterestRoundingTests(unittest.TestCase):
             rows = [
                 dict(date="2025-04-18", description="Opening Balance", debit=0, credit=0,
                      balance=1000, category="opening"),
-                dict(date="2025-07-16", description="Interest", debit=0, credit=25.38,
-                     balance=1025.38, category="interest"),
-                dict(date="2025-07-16", description="Tax", debit=1.52, credit=0,
-                     balance=1023.86, category="tax"),
+                dict(date="2025-07-16", description="Interest", debit=0, credit=25.75,
+                     balance=1025.75, category="interest"),
+                dict(date="2025-07-16", description="Tax", debit=1.55, credit=0,
+                     balance=1024.20, category="tax"),
                 dict(date="2025-07-18", description="Balance C/F", debit=0, credit=0,
-                     balance=1023.86, category="closing"),
+                     balance=1024.20, category="closing"),
             ]
             self.assertEqual(validate_edited_statement(config, rows, imported_check=True), [])
-            rows[1]["credit"] = 26.32  # The retired ROUND_UP daily result.
-            errors = validate_edited_statement(config, rows, imported_check=True)
-            self.assertTrue(any(error["row_index"] == 1 and "credit" in error["fields"] for error in errors))
+            for wrong_interest in (25.38, 26.32):  # Retired daily Half Up and Round Up results.
+                rows[1]["credit"] = wrong_interest
+                errors = validate_edited_statement(config, rows, imported_check=True)
+                self.assertTrue(any(error["row_index"] == 1 and "credit" in error["fields"] for error in errors))
 
-    def test_generated_interest_matches_daily_decimal_oracle(self):
+    def test_generated_interest_matches_interval_decimal_oracle(self):
         for places in (2, 4):
             config = selftest.GeneratorTests().build_config()
             config.interest_rounding_places = places
@@ -82,9 +118,11 @@ class InterestRoundingTests(unittest.TestCase):
             balance, accrued = Decimal(str(config.opening_balance)), Decimal(0)
             previous = date(2024, 7, 16)
             for row in result.rows:
-                day_interest = (balance * Decimal(str(config.interest_rate)) / Decimal(36500)).quantize(
+                if row.category in {"opening", "closing"}:
+                    continue  # Balance-only display rows do not split accrual intervals.
+                interval_interest = (balance * (row.date - previous).days * Decimal(str(config.interest_rate)) / Decimal(36500)).quantize(
                     Decimal("0.01"), rounding=ROUND_HALF_UP)
-                accrued += day_interest * (row.date - previous).days
+                accrued += interval_interest
                 previous = row.date
                 if row.category == "interest":
                     self.assertEqual(row.credit, float(accrued.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)))
@@ -132,7 +170,7 @@ class InterestRoundingTests(unittest.TestCase):
                                 self.assertEqual(interest_rows, [])
                                 self.assertEqual(body["final_balance"], 1000)
                             else:
-                                self.assertEqual(interest_rows[0]["credit"], 25.38)
+                                self.assertEqual(interest_rows[0]["credit"], 25.75)
                             self.assertEqual(body["source_type"], source)
                         finally:
                             connection.close()

@@ -68,6 +68,8 @@ test('import recheck explains the fixed half up rule and sends two places', asyn
   ctx.applyFormValues({ interest_rounding_places: '4' });
   await ctx.requestImportedInterestRateAndRecheck();
   assert.match(ctx.promptMessage, /2 decimal places.*Half Up/);
+  assert.match(ctx.promptMessage, /Balance.*Days.*Rate.*36500/);
+  assert.match(ctx.promptMessage, /round once/);
   assert.match(ctx.promptMessage, /third digit.*5/);
   assert.doesNotMatch(ctx.promptMessage, /Round Up|switch precision|4 decimal/);
   assert.equal(requests.at(-1).body.config.interest_rounding_places, '2');

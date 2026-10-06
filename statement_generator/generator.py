@@ -1182,10 +1182,11 @@ def _segment_interest(balance: float, annual_rate: float, days: int, decimal_pla
     decimal_places = interest_rounding_places(decimal_places)
     if days <= 0 or balance <= 0:
         return 0.0
-    daily_interest = (Decimal(str(balance)) * Decimal(str(annual_rate)) / Decimal("36500")).quantize(
+    # Round each complete balance interval, then sum those rounded amounts.
+    interval_interest = (Decimal(str(balance)) * days * Decimal(str(annual_rate)) / Decimal("36500")).quantize(
         Decimal(1).scaleb(-decimal_places), rounding=ROUND_HALF_UP,
     )
-    return float(daily_interest * days)
+    return float(interval_interest)
 
 
 def _tax_rate_for_posting_date(config: StatementConfig, posting_date: date) -> float:
