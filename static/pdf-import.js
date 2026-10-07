@@ -1,9 +1,23 @@
-import {extractPage,mergePages,validateRows,statementWorkbook,ROW_KEYS,needsOcr,reconcileTextAndOcr,recoverDates} from './pdf-table.js';
+import {extractPage,mergePages,validateRows,statementWorkbook,ROW_KEYS,needsOcr,reconcileTextAndOcr,columnRegions,refineColumn,reviewRows,resolveReadings} from './pdf-table.js?v=20261008-ocr';
 
 const asset = name => new URL(`./vendor/pdf-ocr/${name}`, import.meta.url).href;
 const cancelled = () => new DOMException('PDF import cancelled.', 'AbortError');
 
-export async function readStatementPdf(file,{dateOrder='dmy',forceOcr=false,onProgress=()=>{},signal}={}) {
+export function hasScanImage(operators,ops,pageArea) {
+  let matrix=[1,0,0,1,0,0];const stack=[];
+  for(let i=0;i<operators.fnArray.length;i++) {
+    const fn=operators.fnArray[i],args=operators.argsArray[i];
+    if(fn===ops.save)stack.push([...matrix]);
+    else if(fn===ops.restore)matrix=stack.pop()||[1,0,0,1,0,0];
+    else if(fn===ops.transform) {
+      const [a,b,c,d,e,f]=matrix,[g,h,j,k,l,m]=args;
+      matrix=[a*g+c*h,b*g+d*h,a*j+c*k,b*j+d*k,a*l+c*m+e,b*l+d*m+f];
+    } else if([ops.paintImageXObject,ops.paintInlineImageXObject].includes(fn)&&Math.abs(matrix[0]*matrix[3]-matrix[1]*matrix[2])>=pageArea*0.2)return true;
+  }
+  return false;
+}
+
+export async function readStatementPdf(file,{dateOrder='dmy',forceOcr=false,labels={},onProgress=()=>{},signal}={}) {
   if(file.size>25*1024*1024)throw new Error('Choose a PDF smaller than 25 MB. Split larger files into smaller statements.');
   if(!/\.pdf$/i.test(file.name))throw new Error('Select a PDF statement.');
   const bytes=new Uint8Array(await file.arrayBuffer());
@@ -14,6 +28,8 @@ export async function readStatementPdf(file,{dateOrder='dmy',forceOcr=false,onPr
   pdfjs.GlobalWorkerOptions.workerSrc=asset('pdf.worker.min.mjs');
   const task=pdfjs.getDocument({data:bytes,isEvalSupported:false,cMapUrl:asset('cmaps/'),cMapPacked:true,standardFontDataUrl:asset('standard_fonts/'),wasmUrl:asset('wasm/')});
   let doc,worker,activePage=0,terminated=false,rejectAbort;
+  const renders=new Map();
+  const clearRenders=()=>{for(const {canvas} of renders.values()){canvas.width=0;canvas.height=0;}renders.clear();};
   const abortPromise=new Promise((_,reject)=>{rejectAbort=reject;});
   const stop=()=>{terminated=true;rejectAbort(cancelled());void worker?.terminate().catch(()=>{});void task.destroy().catch(()=>{});};
   signal?.addEventListener('abort',stop,{once:true});
@@ -25,29 +41,43 @@ export async function readStatementPdf(file,{dateOrder='dmy',forceOcr=false,onPr
       const {default:Tesseract}=await import('./vendor/pdf-ocr/tesseract.esm.min.js');
       worker=await abortable(Tesseract.createWorker('eng',1,{workerPath:asset('worker.min.js'),workerBlobURL:false,corePath:asset(''),langPath:asset('').replace(/\/$/,''),cacheMethod:'none',
         logger:m=>{if(!signal?.aborted)onProgress(`Page ${activePage}/${doc.numPages}: ${m.status}${m.progress==null?'':` ${Math.round(m.progress*100)}%`}`);}}).then(created=>{if(signal?.aborted){void created.terminate();throw cancelled();}return created;}));
-      await worker.setParameters({tessedit_pageseg_mode:'11',preserve_interword_spaces:'1',user_defined_dpi:'240'});
+      await worker.setParameters({tessedit_pageseg_mode:'11',preserve_interword_spaces:'1',user_defined_dpi:'300'});
     }
     checkAbort();
     const base=page.getViewport({scale:1,rotation:(page.rotate+rotation)%360});
-    const scale=Math.min(240/72,Math.sqrt(12000000/(base.width*base.height)));
+    // Use a different sampling scale for the full page and the focused columns.
+    // Enlarging every pass identically can reinforce the same resampling error.
+    const dpi=region?300:240,pixels=region?16000000:12000000;
+    const scale=Math.min(dpi/72,Math.sqrt(pixels/(base.width*base.height)));
     const viewport=page.getViewport({scale,rotation:(page.rotate+rotation)%360});
-    const canvas=document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
-    try {
-      await abortable(page.render({canvasContext:canvas.getContext('2d'),viewport,background:'#ffffff'}).promise);
-      checkAbort();
+    const cacheKey=`${rotation}:${headerContrast}:${dpi}`;
+    let cached=renders.get(cacheKey);
+    if(!cached) {
+      const canvas=document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
+      try {await abortable(page.render({canvasContext:canvas.getContext('2d'),viewport,background:'#ffffff'}).promise);}
+      catch(error){canvas.width=0;canvas.height=0;throw error;}
+      cached={canvas};renders.set(cacheKey,cached);
       if(headerContrast) {
-        // Used only to locate shaded/halftone headings. Read transaction values
-        // from the original image, whose fine digits can be lost by thresholding.
         const context=canvas.getContext('2d'),pixels=context.getImageData(0,0,canvas.width,canvas.height),data=pixels.data;
         for(let i=0;i<data.length;i+=4){const value=(data[i]*0.299+data[i+1]*0.587+data[i+2]*0.114)>135?255:0;data[i]=data[i+1]=data[i+2]=value;}
         context.putImageData(pixels,0,0);
       }
-      await worker.setParameters({tessedit_pageseg_mode:region?'6':'11'});
-      const options=region?{rectangle:{left:Math.max(0,Math.floor(region.x*scale)),top:Math.max(0,Math.floor(region.y*scale)),width:Math.min(canvas.width-Math.max(0,Math.floor(region.x*scale)),Math.ceil(region.width*scale)),height:Math.min(canvas.height-Math.max(0,Math.floor(region.y*scale)),Math.ceil(region.height*scale))}}:{};
+    }
+    let canvas=cached.canvas,crop=null,offsetX=0,offsetY=0,padding=0;
+    try {
+      checkAbort();
+      if(region) {
+        offsetX=Math.max(0,Math.floor(region.x*scale));offsetY=Math.max(0,Math.floor(region.y*scale));padding=16;
+        const width=Math.min(canvas.width-offsetX,Math.ceil(region.width*scale)),height=Math.min(canvas.height-offsetY,Math.ceil(region.height*scale));
+        if(width<=0||height<=0)return [];
+        crop=document.createElement('canvas');crop.width=width+padding*2;crop.height=height+padding*2;
+        const context=crop.getContext('2d');context.fillStyle='#ffffff';context.fillRect(0,0,crop.width,crop.height);context.drawImage(canvas,offsetX,offsetY,width,height,padding,padding,width,height);canvas=crop;
+      }
+      await worker.setParameters({tessedit_pageseg_mode:region?.singleLine?'7':region?'6':'11',user_defined_dpi:String(dpi)});
       let timer;
       const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>{void worker?.terminate();worker=null;reject(new Error(`OCR timed out on page ${activePage}. Try a clearer or smaller scan.`));},120000);});
       let data;
-      try {({data}=await abortable(Promise.race([worker.recognize(canvas,options, {text:true,tsv:true}),timeout])));}
+      try {({data}=await abortable(Promise.race([worker.recognize(canvas,{}, {text:true,tsv:true}),timeout])));}
       finally {clearTimeout(timer);}
       checkAbort();
       const words=[];
@@ -55,10 +85,10 @@ export async function readStatementPdf(file,{dateOrder='dmy',forceOcr=false,onPr
         const parts=line.split('\t');if(parts.length<12||parts[0]!=='5')continue;
         const text=parts.slice(11).join('\t').trim();if(!text)continue;
         const [left,top,width,height,confidence]=parts.slice(6,11).map(Number);
-        words.push({text,x0:left/scale,x1:(left+width)/scale,y0:top/scale,y1:(top+height)/scale,confidence});
+        words.push({text,x0:(left+offsetX-padding)/scale,x1:(left+width+offsetX-padding)/scale,y0:(top+offsetY-padding)/scale,y1:(top+height+offsetY-padding)/scale,confidence});
       }
       return words;
-    } finally {canvas.width=0;canvas.height=0;}
+    } finally {if(crop){crop.width=0;crop.height=0;}}
   }
   try {
     doc=await abortable(task.promise);
@@ -67,7 +97,7 @@ export async function readStatementPdf(file,{dateOrder='dmy',forceOcr=false,onPr
     for(let number=1;number<=doc.numPages;number++) {
       checkAbort();activePage=number;onProgress(`Reading page ${number}/${doc.numPages}…`);
       const page=await abortable(doc.getPage(number)),viewport=page.getViewport({scale:1});
-      let words=[],usedOcr=false;
+      let words=[],usedOcr=false,rotation=0;
       {
         const content=await abortable(page.getTextContent());
         for(const item of content.items) {
@@ -78,8 +108,10 @@ export async function readStatementPdf(file,{dateOrder='dmy',forceOcr=false,onPr
         }
       }
       let result=extractPage(words,number,columns,dateOrder);
-      // A letterhead text layer alone must not suppress OCR of the scanned transaction table.
-      if(forceOcr || needsOcr(result,dateOrder) || !words.length) {
+      const scanned=hasScanImage(await abortable(page.getOperatorList()),pdfjs.OPS,viewport.width*viewport.height);
+      // Scans often have a syntactically valid but inaccurate hidden OCR layer.
+      // Read the actual page image even when that layer passes format validation.
+      if(forceOcr || scanned || needsOcr(result,dateOrder) || reviewRows(result.rows,labels,dateOrder).length || !words.length) {
         const textResult=result;
         usedOcr=true;ocrPages++;
         words=await recognize(page);
@@ -90,22 +122,41 @@ export async function readStatementPdf(file,{dateOrder='dmy',forceOcr=false,onPr
           if(contrasted.columns){result=extractPage(words,number,contrasted.columns,dateOrder);result.headerFound=contrasted.headerFound;}
         }
         if(!result.headerFound && !result.rows.length) {
-          for(const rotation of [90,180,270]) {
+          for(const angle of [90,180,270]) {
             onProgress(`Page ${number}/${doc.numPages}: checking scan orientation…`);
-            const rotated=await recognize(page,rotation);
+            const rotated=await recognize(page,angle);
             const candidate=extractPage(rotated,number,null,dateOrder);
-            if(candidate.headerFound && candidate.rows.length){result=candidate;break;}
+            if(candidate.headerFound && candidate.rows.length){result=candidate;rotation=angle;break;}
           }
         }
-        if(result.rows.length && validateRows(result.rows,dateOrder).some(issue=>issue.fields.includes('date'))) {
-          const dateColumn=result.columns.findIndex(c=>c.key==='date'),col=result.columns[dateColumn],next=result.columns[dateColumn+1];
-          if(next) {
-            const x=Math.max(0,col.x0-60),right=(col.x1+next.x0)/2,y=Math.max(0,result.rows[0].y-18),bottom=result.rows.at(-1).y+18;
-            onProgress(`Page ${number}/${doc.numPages}: reading unclear dates…`);
-            result=recoverDates(result,await recognize(page,0,false,{x,y,width:right-x,height:bottom-y}),dateOrder);
+        const oriented=page.getViewport({scale:1,rotation:(page.rotate+rotation)%360});
+        const regions=columnRegions(result,oriented.width,oriented.height);
+        for(const region of regions) {
+          onProgress(`Page ${number}/${doc.numPages}: reading ${region.key.replace('_',' ')} line by line…`);
+          try {result=refineColumn(result,region.key,await recognize(page,rotation,false,region),dateOrder);}
+          catch(error) {
+            if(error.name==='AbortError')throw error;
+            result.issues.push({page:number,fields:[],message:`Page ${number}: focused reading could not finish. Review the original scan. ${error.message}`});break;
           }
         }
-        if(!forceOcr)result=reconcileTextAndOcr(textResult,result,dateOrder);
+        if(!forceOcr&&!rotation)result=scanned?reconcileTextAndOcr(result,textResult,dateOrder,'page OCR','embedded PDF text'):reconcileTextAndOcr(textResult,result,dateOrder);
+        result=resolveReadings(result);
+        // Retry unresolved conflicts as individual cells. This is independent of
+        // the configured labels and financial rules, so errors are not disguised.
+        const conflicts=[...new Map(result.issues.filter(issue=>issue.suggestion&&issue.row_index!=null).map(issue=>[`${issue.row_index}:${issue.suggestion.key}`,issue])).values()].slice(0,40);
+        for(const issue of conflicts) {
+          const row=result.rows[issue.row_index],key=issue.suggestion.key,region=regions.find(r=>r.key===key);
+          if(!row||!region)continue;
+          const y=Math.max(region.y,row.y-Math.max(7,row.height*.75)),bottom=Math.min(region.y+region.height,row.y+Math.max(7,row.height*.75));
+          onProgress(`Page ${number}/${doc.numPages}: checking row ${issue.row_index+1} ${key}…`);
+          try {
+            const words=await recognize(page,rotation,false,{...region,y,height:bottom-y,singleLine:true});
+            const refined=refineColumn({...result,rows:[row],issues:[]},key,words,dateOrder,'single-line OCR');
+            result.rows[issue.row_index]=refined.rows[0];
+            result.issues.push(...refined.issues.map(item=>({...item,row_index:issue.row_index})));
+          } catch(error) {if(error.name==='AbortError')throw error;break;}
+        }
+        result=resolveReadings(result);
         result.headerFound ||= textResult.headerFound;
       }
       if(result.columns)columns=result.columns;
@@ -113,16 +164,17 @@ export async function readStatementPdf(file,{dateOrder='dmy',forceOcr=false,onPr
       else if(!result.headerFound)result.issues.push({page:number,fields:[],message:`Page ${number}: continued using the previous page's columns. Verify the alignment.`});
       pages.push(result);report.push({page:number,rows:result.rows.length,method:usedOcr?'OCR':'PDF text'});
       if(pages.reduce((sum,p)=>sum+p.rows.length,0)>5000)throw new Error('Import up to 5,000 statement rows at a time.');
-      page.cleanup();
+      clearRenders();page.cleanup();
     }
     const result=mergePages(pages);
     if(!result.rows.length)throw new Error('No statement table was detected. The PDF must show Date, Description/Particulars, Debit, Credit and Balance headings. Try a clearer scan or Force OCR.');
-    return {...result,pages:report,ocrPages,includeCheque:pages.some(p=>p.columns?.some(c=>c.key==='cheque_no'))};
+    return {...result,pages:report,ocrPages,dateOrder,includeCheque:pages.some(p=>p.columns?.some(c=>c.key==='cheque_no'))};
   } catch(error) {
     if(signal?.aborted)throw cancelled();
     if(error.name==='PasswordException')throw new Error('This PDF is password protected. Unlock a copy before importing it.');
     throw error;
   } finally {
+    clearRenders();
     signal?.removeEventListener('abort',stop);
     if(worker&&!terminated)await worker.terminate().catch(()=>{});
     await task.destroy().catch(()=>{});
@@ -134,13 +186,35 @@ export function setupPdfImport(h) {
   panel.innerHTML='<h3>Import PDF Statement</h3><p>Read a text PDF or scan every page with OCR. Review the extracted table, then import it through the same checks as Excel. Letterheads, stamps and signatures are excluded where they fall outside the transaction table.</p><div class="field-grid two-col"><label class="field"><span>Numeric date order</span><select id="pdf-date-order"><option value="dmy">Day / Month / Year</option><option value="mdy">Month / Day / Year</option></select></label><label class="check-field"><input type="checkbox" id="pdf-force-ocr"> Force OCR (unreliable PDF text layer)</label></div><div class="workspace-shortcuts"><button type="button" class="ghost-button" id="pdf-choose">Choose PDF</button><button type="button" class="ghost-button" id="pdf-cancel" hidden>Cancel scan</button></div><input type="file" id="pdf-file" accept=".pdf,application/pdf" hidden><p id="pdf-progress" role="status" aria-live="polite"></p><div id="pdf-review" hidden><p id="pdf-summary"></p><p class="muted">OCR can misread digits and capitalisation. Compare dates, amounts and descriptions with your original PDF. Edit any incorrect cells below. Other statement errors appear in the usual checker after import.</p><ul id="pdf-issues"></ul><div class="table-shell"><table class="data-table"><thead><tr><th>Page</th><th>Date</th><th>Description / Particulars</th><th>Cheque No.</th><th>Debit</th><th>Credit</th><th>Balance</th><th></th></tr></thead><tbody id="pdf-rows"></tbody></table></div><div class="workspace-shortcuts"><button type="button" class="primary-button" id="pdf-import-check">Import and check statement</button><button type="button" class="ghost-button" id="pdf-download">Download extracted Excel</button><a id="pdf-original" target="_blank" rel="noopener">View original PDF</a></div></div>';
   document.getElementById('check-panel').append(panel);
   const $=id=>document.getElementById(id);
+  $('pdf-date-order').options[0].textContent='Day / Month / Year (year first: Year / Month / Day)';
+  $('pdf-date-order').options[1].textContent='Month / Day / Year (year first: Year / Month / Day)';
+  $('pdf-date-order').add(new Option('Year / Day / Month (for example 2026/07/10 = 7 October)','ydm'));
+  $('pdf-date-order').closest('.field-grid').insertAdjacentHTML('afterend','<p class="muted">Choose the numeric date order before scanning. Dates such as 2026/07/10 are ambiguous; the selected order applies to all pages. Extracted dates are shown as YYYY-MM-DD. Jan = January; Jun = June. Descriptions keep their original case and are checked against the Deposit, Withdraw, Interest and Tax text above.</p>');
+  $('pdf-download').insertAdjacentHTML('afterend','<button type="button" class="ghost-button" id="pdf-recheck">Review current cells</button>');
   let extraction=null,filename='',originalUrl='',controller=null,busy=false,revision=0;
   const status=text=>{$('pdf-progress').textContent=text;};
-  function setBusy(value) {busy=value;for(const id of ['pdf-choose','pdf-import-check','pdf-download','pdf-date-order','pdf-force-ocr'])$(id).disabled=value;}
+  function setBusy(value) {busy=value;for(const id of ['pdf-choose','pdf-import-check','pdf-download','pdf-date-order','pdf-force-ocr','pdf-recheck'])$(id).disabled=value;$('pdf-rows').inert=value;}
+  const labels=()=>h.getValues?.()||{};
   function issues(items) {
     $('pdf-issues').replaceChildren();
-    for(const issue of items.slice(0,100)) {const li=document.createElement('li');li.textContent=(issue.row_index==null?'':`Row ${issue.row_index+1}: `)+issue.message;$('pdf-issues').append(li);}
+    for(const issue of items.slice(0,100)) {
+      const li=document.createElement('li');li.textContent=(issue.row_index==null?'':`Row ${issue.row_index+1}: `)+issue.message;
+      if(issue.suggestion&&issue.row_index!=null) {
+        const button=document.createElement('button');button.type='button';button.className='ghost-button';button.textContent=`Use ${issue.suggestion.key}: ${issue.suggestion.value}`;
+        button.onclick=()=>{if(busy)return;const row=extraction.rows[issue.row_index];row[issue.suggestion.key]=issue.suggestion.value;if(issue.suggestion.key==='date')row.date_normalized=true;renderRows();};li.append(' ',button);
+      }
+      $('pdf-issues').append(li);
+    }
     if(items.length>100){const li=document.createElement('li');li.textContent=`${items.length-100} more cells need review.`;$('pdf-issues').append(li);}
+  }
+  function review() {
+    if(!extraction)return;
+    const scanIssues=extraction.issues.filter(issue=>!issue.row||extraction.rows.includes(issue.row)&&issue.fields.some(key=>issue.row[key]===issue.readings[key])).map(issue=>({...issue,row_index:issue.row?extraction.rows.indexOf(issue.row):null}));
+    const all=[...validateRows(extraction.rows,extraction.dateOrder),...reviewRows(extraction.rows,labels(),extraction.dateOrder),...scanIssues];
+    const unique=[...new Map(all.map(issue=>[`${issue.row_index}:${issue.message}`,issue])).values()];
+    for(const input of $('pdf-rows').querySelectorAll('input'))input.removeAttribute('aria-invalid');
+    for(const issue of unique)for(const key of issue.fields)$('pdf-rows').children[issue.row_index]?.querySelector(`[data-field="${key}"]`)?.setAttribute('aria-invalid','true');
+    issues(unique);
   }
   function renderRows() {
     $('pdf-rows').replaceChildren();
@@ -148,18 +222,25 @@ export function setupPdfImport(h) {
       const tr=document.createElement('tr'),page=document.createElement('td');page.textContent=row.page;tr.append(page);
       for(const key of ROW_KEYS) {
         const td=document.createElement('td'),input=document.createElement('input');input.value=row[key]??'';input.setAttribute('aria-label',`PDF row ${index+1} ${key}`);input.dataset.field=key;
-        input.oninput=()=>{row[key]=input.value;input.removeAttribute('aria-invalid');};td.append(input);tr.append(td);
+        if(key==='date'){input.title=`Date in PDF: ${row.raw_date||row.date}. Edit using YYYY-MM-DD.`;input.placeholder='YYYY-MM-DD';}
+        input.oninput=()=>{row[key]=input.value;if(key==='date')row.date_normalized=/^\d{4}-\d{2}-\d{2}$/.test(input.value.trim());review();};td.append(input);tr.append(td);
       }
       const td=document.createElement('td'),insert=document.createElement('button'),remove=document.createElement('button');
       insert.type='button';insert.textContent='Insert above';insert.className='ghost-button';insert.onclick=()=>{extraction.rows.splice(index,0,{...Object.fromEntries(ROW_KEYS.map(key=>[key,''])),page:row.page});renderRows();};
       remove.type='button';remove.textContent='Remove';remove.className='ghost-button';remove.onclick=()=>{extraction.rows.splice(index,1);renderRows();};td.append(insert,remove);tr.append(td);$('pdf-rows').append(tr);
     });
+    review();
   }
   async function workbook() {
-    const invalid=validateRows(extraction?.rows||[],$('pdf-date-order').value);
+    if(!extraction)throw new Error('Choose a PDF statement first.');
+    if(extraction.dateOrder!==$('pdf-date-order').value)throw new Error('The numeric date order changed. Choose the PDF again to rescan it with the new order.');
+    review();
+    const invalid=validateRows(extraction.rows,extraction.dateOrder);
     if(invalid.length) {issues(invalid);for(const issue of invalid)for(const field of issue.fields)$('pdf-rows').children[issue.row_index]?.querySelector(`[data-field="${field}"]`)?.setAttribute('aria-invalid','true');throw new Error('Correct the highlighted PDF cells before continuing.');}
-    return new File([await statementWorkbook(extraction.rows,$('pdf-date-order').value,extraction.includeCheque)],filename.replace(/\.pdf$/i,'')+'-extracted.xlsx',{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    return new File([await statementWorkbook(extraction.rows,extraction.dateOrder,extraction.includeCheque)],filename.replace(/\.pdf$/i,'')+'-extracted.xlsx',{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
   }
+  $('pdf-recheck').onclick=()=>{review();status('Review updated using the current cells and description text. Interest, tax and all other rules are checked after import.');};
+  $('pdf-date-order').onchange=()=>{if(extraction&&extraction.dateOrder!==$('pdf-date-order').value)status('Date order changed. Choose the PDF again to rescan all dates with this order.');};
   $('pdf-choose').onclick=()=>{if(!busy)$('pdf-file').click();};
   $('pdf-cancel').onclick=()=>{controller?.abort();status('Cancelling scan…');};
   $('pdf-file').onchange=async()=>{
@@ -167,12 +248,13 @@ export function setupPdfImport(h) {
     const scanRevision=++revision;
     setBusy(true);h.pending(1);$('pdf-review').hidden=true;$('pdf-cancel').hidden=false;controller=new AbortController();
     try {
-      const result=await readStatementPdf(file,{dateOrder:$('pdf-date-order').value,forceOcr:$('pdf-force-ocr').checked,onProgress:text=>{if(scanRevision===revision)status(text);},signal:controller.signal});
+      const result=await readStatementPdf(file,{dateOrder:$('pdf-date-order').value,forceOcr:$('pdf-force-ocr').checked,labels:labels(),onProgress:text=>{if(scanRevision===revision)status(text);},signal:controller.signal});
       if(scanRevision!==revision)return;
       extraction=result;
+      extraction.issues=extraction.issues.map(issue=>({...issue,row:issue.row_index==null?null:extraction.rows[issue.row_index],readings:issue.row_index==null?{}:Object.fromEntries(issue.fields.map(key=>[key,extraction.rows[issue.row_index]?.[key]]))}));
       filename=file.name;if(originalUrl)URL.revokeObjectURL(originalUrl);originalUrl=URL.createObjectURL(file);$('pdf-original').href=originalUrl;
       $('pdf-summary').textContent=`${extraction.rows.length} rows from ${extraction.pages.length} pages (${extraction.ocrPages} scanned with OCR). `+extraction.pages.map(p=>`Page ${p.page}: ${p.rows} rows, ${p.method}`).join('; ');
-      renderRows();issues(extraction.issues);$('pdf-review').hidden=false;status('Ready. Review the table, then import and check.');
+      renderRows();$('pdf-review').hidden=false;status('Ready. Review highlighted cells and any alternative readings against the PDF, then import and check.');
     } catch(error) {if(scanRevision===revision){status(error.name==='AbortError'?'PDF scan cancelled.':error.message);h.log(error.message,'error');}}
     finally {controller=null;setBusy(false);h.pending(-1);$('pdf-cancel').hidden=true;}
   };

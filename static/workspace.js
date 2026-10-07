@@ -1,4 +1,4 @@
-import { setupPdfImport } from './pdf-import.js?v=20261007-pdf';
+import { setupPdfImport } from './pdf-import.js?v=20261008-ocr';
 // Shared web workspace for the PHP and Python editions.
 import {canGenerateStatements, setupStatementPreview} from './preview-workspace.js?v=20261007-preview';
 export const DESCRIPTION_ORDERS = {

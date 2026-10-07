@@ -95,3 +95,97 @@ test('a damaged scan date keeps its transaction available for focused date recov
  const repaired=recoverDates(result,[word('18-Aug-2026',30,55)]);
  assert.equal(repaired.rows[0].date,'2026-08-18');assert.equal(repaired.rows[0].debit,'500.00');
 });
+
+test('all month names and supported numeric date orders are strict, including OCR month aliases',async()=>{
+ const {parseDate,readDate,extractPage,statementWorkbook}=await api;
+ const months=['January','February','March','April','May','June','July','August','September','October','November','December'];
+ months.forEach((month,i)=>{for(const spelling of [month,month.slice(0,3)])assert.equal(parseDate(`07-${spelling}-2026`),`2026-${String(i+1).padStart(2,'0')}-07`);});
+ for(const value of ['2026-10-07','2026/10/07','07/10/26','07-Oct-2026','07-October-2026','07.10.2026'])assert.equal(parseDate(value),'2026-10-07');
+ for(const value of ['2026/07/10','2026-07-10'])assert.equal(parseDate(value,'ydm'),'2026-10-07');
+ for(const month of ['Octopus','Junk','Janu','XYZ'])assert.equal(parseDate(`07-${month}-2026`),'');
+ for(const month of ['0ct','0tc','Otc','0ctober'])assert.deepEqual(readDate(`07-${month}-2026`),{date:'2026-10-07',corrected:true});
+ assert.equal(readDate('07-Se9-2026').date,'2026-09-07');assert.equal(readDate('31-0tc-2026').date,'2026-10-31');assert.equal(readDate('32-0tc-2026').date,'');
+ const result=extractPage([...header(30),...row('2026/07/10','Opening','','','1000',55),...row('08-0tc-2026','Deposit','','500','1500',80)],1,null,'ydm');
+ assert.equal(result.rows[0].date,'2026-10-07');assert.equal(result.rows[1].date,'2026-10-08');assert.ok(result.issues.some(i=>i.message.includes('OCR month')));
+ const {unzipSync,strFromU8}=await import(pathToFileURL(path.join(root,assets,'vendor/pdf-ocr/fflate.mjs')).href);
+ const xml=strFromU8(unzipSync(await statementWorkbook(result.rows,'ydm'))['xl/worksheets/sheet1.xml']);assert.match(xml,/2026-10-07/);assert.doesNotMatch(xml,/2026-07-10/);
+});
+
+test('focused columns recover unreadable fields and leave conflicting readable money for review',async()=>{
+ const {extractPage,columnRegions,refineColumn}=await api;
+ let result=extractPage([...header(30),...row('??','Deposlted By: Sample','','1O00','2O00',55),...row('08-Oct-2026','Deposit','','500','2500',80)],1);
+ assert.equal(result.rows.length,2,'Keep rows even when both date and balance are unreadable');
+ const regions=columnRegions(result,600,800);assert.equal(regions.length,6);assert.ok(regions.every(r=>r.width>0&&r.height>0));
+ result=refineColumn(result,'date',[word('07-0tc-2026',30,55),word('08-Oct-2026',30,80)]);
+ result=refineColumn(result,'credit',[word('1000.00',450,55),word('600.00',450,80)]);
+ result=refineColumn(result,'description',[word('Deposited By: Sample',120,55)]);
+ assert.equal(result.rows[0].date,'2026-10-07');assert.equal(result.rows[0].credit,'1000.00');assert.equal(result.rows[1].credit,'500.00');
+ assert.equal(result.rows[0].description,'Deposlted By: Sample','Do not silently replace text to match a rule');
+ assert.ok(result.issues.some(i=>i.suggestion?.value==='600.00'));assert.ok(result.issues.some(i=>i.suggestion?.value==='Deposited By: Sample'));
+});
+
+test('OCR review detects wrong-side and case-sensitive labels without comparing people names',async()=>{
+ const {reviewRows}=await api;
+ const labels={deposit_text:'Deposited By:',withdrawal_text:'Withdrawn By:',interest_text:'Interest:',tax_text:'Tax:'};
+ const rows=[{date:'2026-10-07',description:'Opening',debit:'',credit:'',balance:'1000'},
+ {date:'2026-10-08',description:'Extra Deposited By: Person A',debit:'',credit:'500',balance:'1500'},
+ {date:'2026-10-09',description:'Withdrawn By: Someone Else',debit:'100',credit:'',balance:'1400'},
+ {date:'2026-10-10',description:'Interest:',debit:'',credit:'10',balance:'1410'},
+ {date:'2026-10-10',description:'Tax:',debit:'0.6',credit:'',balance:'1409.40'}];
+ assert.deepEqual(reviewRows(rows,labels),[]);
+ const caseWrong=rows.map(r=>({...r}));caseWrong[1].description='Extra deposited By: New Name';assert.ok(reviewRows(caseWrong,labels).some(i=>i.row_index===1&&i.fields.includes('description')));
+ const wrongSide=rows.map(r=>({...r}));wrongSide[2].description='Deposited By: New Name';assert.ok(reviewRows(wrongSide,labels).some(i=>i.message.includes('wrong amount side')));
+ const bad=rows.map(r=>({...r}));bad[1].credit='50';bad[3].description='interest:';assert.ok(reviewRows(bad,labels).some(i=>i.fields.includes('balance')));assert.ok(reviewRows(bad,labels).some(i=>i.row_index===3&&i.fields.includes('description')));
+ assert.equal(rows[1].credit,'500','Review never rewrites amounts');
+});
+
+test('scanned page detection checks image coverage and restores graphics transforms',async()=>{
+ const {hasScanImage}=await import(pathToFileURL(path.join(root,assets,'pdf-import.js')).href);
+ const ops={save:1,restore:2,transform:3,paintImageXObject:4,paintInlineImageXObject:5};
+ assert.equal(hasScanImage({fnArray:[1,3,4,2],argsArray:[[],[600,0,0,800,0,0],[],[]]},ops,600*800),true);
+ assert.equal(hasScanImage({fnArray:[1,3,4,2,4],argsArray:[[],[50,0,0,50,0,0],[],[],[]]},ops,600*800),false);
+});
+
+test('reconciliation preserves confidence warnings and does not reverse normalized year/day/month dates',async()=>{
+ const {reconcileTextAndOcr}=await api;
+ const row={date:'2026-10-07',date_normalized:true,description:'Deposit',debit:'',credit:'500',balance:'1500',y:100,page:1};
+ const result=reconcileTextAndOcr({rows:[row],issues:[{row_index:0,fields:['date'],message:'Verify corrected month'}]}, {rows:[row],issues:[{row_index:0,fields:['description'],message:'Low confidence'}]},'ydm');
+ assert.equal(result.rows.length,1);assert.equal(result.rows[0].date,'2026-10-07');assert.equal(result.issues.length,2);
+});
+
+test('OCR agreement improves text but keeps readable financial values for review',async()=>{
+ const {refineColumn,reconcileTextAndOcr,resolveReadings}=await api;
+ const row={date:'2026-10-07',date_normalized:true,description:'Withdrawn By Sample',debit:'1977.43',credit:'',balance:'2000',y:60,page:1,height:10};
+ let result={rows:[row],issues:[]};
+ result=refineColumn(result,'description',[word('Withdrawn By: Sample',120,55)]);
+ result=refineColumn(result,'debit',[word('1977.23',380,55)]);
+ assert.equal(resolveReadings(result).rows[0].debit,'1977.43','A disagreement alone does not change readable money');
+ result=reconcileTextAndOcr(result,{rows:[{...row,description:'Withdrawn By: Sample',debit:'1977.23'}],issues:[]},'dmy','page OCR','embedded PDF text');
+ result=resolveReadings(result);
+ assert.equal(result.rows[0].debit,'1977.43');assert.equal(result.rows[0].description,'Withdrawn By: Sample');
+ assert.equal(result.rows[0].balance,'2000','Does not rewrite a balance to reconcile an amount');
+ assert.ok(result.issues.some(i=>i.message.includes('independent readings agree')));
+ assert.ok(result.issues.some(i=>i.suggestion?.value==='1977.23'));
+ const cheque={rows:[{...row,cheque_no:'100947',readings:{cheque_no:[{source:'page',value:'100947'},{source:'column',value:'100547'},{source:'line',value:'100547'}]}}],issues:[]};
+ assert.equal(resolveReadings(cheque).rows[0].cheque_no,'100947','Repeated resampling errors must not overwrite a readable cheque number');
+ const tie={rows:[{...row,readings:{debit:[{source:'page',value:'100'},{source:'column',value:'100'},{source:'text',value:'200'},{source:'line',value:'200'}]}}],issues:[]};
+ assert.equal(resolveReadings(tie).rows[0].debit,'1977.43');
+ const noise={rows:[{...row,readings:{description:[{source:'page',value:row.description},{source:'column',value:'Withdrawn By ~~ Sample'},{source:'line',value:'Withdrawn By ~~ Sample'}]}}],issues:[]};
+ assert.equal(resolveReadings(noise).rows[0].description,row.description,'Repeated border noise is not automatically inserted');
+});
+
+test('OCR label checks require whole labels and allow an opposite label inside the correct label',async()=>{
+ const {reviewRows}=await api;
+ const row={date:'2026-10-07',description:'Deposited By: Sample',credit:'500',debit:'',balance:'1500'};
+ assert.equal(reviewRows([row],{deposit_text:'Deposit'}).length,1);
+ assert.equal(reviewRows([row],{deposit_text:'Deposited By:',withdrawal_text:'By:'}).length,0);
+ assert.equal(reviewRows([{...row,description:'Deposited   By: Sample'}],{deposit_text:'Deposited By:'}).length,0);
+});
+
+test('page merge keeps review warnings on their actual transaction after removing carry rows',async()=>{
+ const {mergePages}=await api;
+ const carry={date:'2026-10-07',description:'Balance C/F',debit:'',credit:'',balance:'1000'};
+ const merged=mergePages([{rows:[{...carry,description:'Opening'},carry],issues:[{row_index:1,fields:['description'],message:'Carry warning'}]},
+ {rows:[{...carry,description:'Balance B/F'},{...carry,date:'2026-10-08',description:'Deposit',credit:'500',balance:'1500'}],issues:[{row_index:0,fields:['description'],message:'Repeated carry warning'},{row_index:1,fields:['credit'],message:'Real transaction warning'}]}]);
+ assert.equal(merged.rows.length,2);assert.deepEqual(merged.issues,[{row_index:1,fields:['credit'],message:'Real transaction warning'}]);
+});
