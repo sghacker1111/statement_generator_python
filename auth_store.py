@@ -81,6 +81,10 @@ class AuthUser:
     def can_use_statements(self) -> bool:
         return not self.is_blocked
 
+    @property
+    def can_generate_statements(self) -> bool:
+        return self.can_use_statements and self.access_mode != "check_only"
+
     def as_payload(self) -> dict[str, object]:
         return {
             "id": self.id,
@@ -90,6 +94,7 @@ class AuthUser:
             "is_super_admin": self.is_super_admin,
             "can_manage_users": self.can_manage_users,
             "can_use_statements": self.can_use_statements,
+            "can_generate_statements": self.can_generate_statements,
             "created_at": self.created_at,
             "access_mode": self.access_mode,
             "remaining_statements": self.remaining_statements,
@@ -471,6 +476,26 @@ class AuthStore:
         if not user.can_use_statements:
             raise PermissionError("Admin accounts can manage users only. Use a Super Admin or User account for statement work.")
         return user
+
+    def ensure_generation_allowed(self, user: AuthUser) -> None:
+        if not user.can_generate_statements:
+            raise PermissionError("This user can only import and check statements. Please contact the admin for generation access.")
+        self._ensure_statement_allowed(user)
+
+    def authorize_statement_work(self, user: AuthUser, payload: dict, existing: bool = True) -> None:
+        if user.access_mode != "check_only":
+            return
+        form = payload.get("config") or {}
+        if str(form.get("prepend_statement_mode", "")).strip().lower() in {"1", "true", "yes", "on"}:
+            raise PermissionError("Checker-only users cannot generate or add a previous statement.")
+        if not existing:
+            return
+        statement_id = int(payload.get("statement_id", 0) or 0)
+        if statement_id <= 0 or payload.get("source_type") != "imported":
+            raise PermissionError("Import a statement before checking, editing or exporting it.")
+        saved = self.statement_detail(user, statement_id)
+        if saved["source_type"] != "imported":
+            raise PermissionError("Checker-only users can edit and export imported statements only.")
 
     def verify_user_password(self, user_id: int, password: str) -> bool:
         with self._lock, self._connect() as connection:
@@ -1263,4 +1288,3 @@ class AuthStore:
                 for row in rows
             ]
         }
-

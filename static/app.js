@@ -1,4 +1,5 @@
-import { createWorkspace } from "./workspace.js?v=20261007-pdf";
+import { createWorkspace } from "./workspace.js?v=20261007-preview";
+import { canGenerateStatements } from "./preview-workspace.js?v=20261007-preview";
 let workspaceUI = null;
 let authBusy = false;
 let sessionEpoch = 0;
@@ -632,6 +633,7 @@ function applyRoleAccess(user) {
       node.hidden = Boolean(user) && !statementAllowed;
     }
   }
+  document.getElementById("create-stat-btn").hidden = !canGenerateStatements(user) || Boolean(workspaceUI?.isChecking());
   if (user && adminAllowed && !statementAllowed) {
     setTab("admin-panel");
   } else if (user && document.querySelector(".form-panel.is-active")?.hidden) {
@@ -855,6 +857,7 @@ function updatePreviewControls() {
   updateStatementButton.disabled = !state.statementEditMode;
   cancelEditButton.disabled = !state.statementEditMode;
   previewEditNote.hidden = !state.statementEditMode;
+  workspaceUI?.refreshPreview();
   validateStatementButton.disabled = !hasStatement;
 }
 
@@ -3500,6 +3503,7 @@ async function restoreSelectedUserDates() {
 }
 
 async function generateStatement() {
+  if (!canGenerateStatements(state.currentUser) || workspaceUI?.isChecking()) throw new Error("This workspace allows importing and checking statements only.");
   if (!updateTransactionRunState()) {
     throw new Error("Correct the consecutive transaction counts or percentages before generating.");
   }
@@ -3523,6 +3527,7 @@ async function generateStatement() {
 }
 
 function buildExportPayload(exportKind, exportMode, templateName = "") {
+  if (state.statementEditMode) throw new Error("Save your edits with Update & Recalculate before exporting or printing.");
   if (!state.currentStatement) {
     throw new Error("Generate, import, or load a statement before exporting.");
   }
@@ -3997,10 +4002,10 @@ function renderInlinePrintPreview(printHtml, kind, autoPrint = false) {
 
 }
 
-async function openPrintDocument(kind, autoPrint = false) {
+async function openPrintDocument(kind, autoPrint = false, selectedFormat = null) {
   await ensureWorkingTransactionDates();
-  const templateName = document.getElementById(`${kind}-template-list`)?.value || "";
-  const mode = document.getElementById("print-format-mode")?.value === "custom" ? "template" : "normal";
+  const templateName = selectedFormat ?? (document.getElementById(`${kind}-template-list`)?.value || "");
+  const mode = selectedFormat !== null ? (selectedFormat ? "template" : "normal") : (document.getElementById("print-format-mode")?.value === "custom" ? "template" : "normal");
   if (mode === "template" && !templateName) throw new Error("Select a saved format first.");
   const blob = await requestExportBlobForPrint({...buildExportPayload(kind, mode, templateName),print_preview_html:true});
   const letterhead = await OfficeWorkspace.forPrint(kind, mode === "normal" ? "normal" : templateName);
@@ -5440,6 +5445,10 @@ workspaceUI = createWorkspace({
   state, apiUrl, fetchJson, requestPassword, setTab, getValues:getFormValues, applyValues:applyFormValues,
   clearStatement:clearCurrentStatement, saveDraft:saveDraftProfile, scheduleSave:scheduleAutoProfileSave,
   renderUsers, log:appendLog, loadProfile:loadProfileFormat, importStatement:importStatementFile,
+  exportStatement(format, template) {
+    return requestDownload({...buildExportPayload("statement", template ? "template" : "normal", template), statement_file_type:format === "word" ? "word" : "excel"}, "Statement");
+  },
+  printStatement(template, autoPrint) {return openPrintDocument("statement", autoPrint, template);},
   renderStatement() {
     renderSummary(state.currentStatement?.summary || {});
     renderPreviewRows(state.statementEditMode ? state.editableRows : (state.currentStatement?.rows || []));

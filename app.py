@@ -3587,6 +3587,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
 
             if route == "/api/generate":
                 current_user = self._require_statement_user()
+                auth_store().ensure_generation_allowed(current_user)
                 payload = self._read_json_body()
                 config = build_config(payload, user_id=current_user.id)
                 result = generate_statement(config)
@@ -3614,6 +3615,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
                     raise ValueError("Import request config data is invalid.") from error
                 if not isinstance(config_payload, dict):
                     raise ValueError("Import request config data is invalid.")
+                auth_store().authorize_statement_work(current_user, {"config": config_payload}, existing=False)
 
                 temp_dir = Path(tempfile.mkdtemp(prefix="web_statement_import_", dir=str(WEB_TEMP_ROOT)))
                 try:
@@ -3648,6 +3650,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
             if route == "/api/recalculate_statement":
                 payload = self._read_json_body()
                 current_user = self._require_statement_user()
+                auth_store().authorize_statement_work(current_user, payload)
                 form_payload = payload.get("config")
                 edited_rows = payload.get("edited_rows")
                 if not isinstance(form_payload, dict):
@@ -3686,6 +3689,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
             if route == "/api/validate_statement":
                 current_user = self._require_statement_user()
                 payload = self._read_json_body()
+                auth_store().authorize_statement_work(current_user, payload)
                 form_payload = payload.get("config")
                 edited_rows = payload.get("edited_rows")
                 if not isinstance(form_payload, dict):
@@ -3869,8 +3873,12 @@ class StatementWebHandler(BaseHTTPRequestHandler):
         return fields, files
 
     def _handle_export(self, current_user: AuthUser, payload: dict[str, object]) -> None:
+        auth_store().authorize_statement_work(current_user, payload)
+        if current_user.access_mode == "check_only" and not (payload.get("result_payload") or {}).get("rows"):
+            raise PermissionError("Load the imported statement before exporting it.")
         export_kind = str(payload.get("export_kind", "")).strip()
         export_mode = str(payload.get("export_mode", "")).strip()
+        statement_word = export_kind == "statement" and export_mode == "normal" and payload.get("statement_file_type") == "word"
         preview_html = bool(payload.get("print_preview_html"))
         include_letterhead = bool(payload.get("include_letterhead")) and not preview_html
         if export_kind not in {"statement", "certificate"}:
@@ -3882,7 +3890,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
         del exchange_rate
 
         if export_mode == "normal":
-            suffix = ".xls" if export_kind == "statement" else ".doc"
+            suffix = ".xls" if export_kind == "statement" and not statement_word else ".doc"
             template_name = "normal"
             body = (
                 build_normal_statement_bytes(export_payload)
@@ -3909,8 +3917,13 @@ class StatementWebHandler(BaseHTTPRequestHandler):
         try:
             output_path = temp_dir / filename
             if include_letterhead and export_mode == "normal":
-                working_output = output_path.with_suffix(".xlsx" if export_kind == "statement" else ".docx")
-                (export_normal_statement if export_kind == "statement" else export_normal_certificate)(working_output, export_payload)
+                working_output = output_path.with_suffix(".xlsx" if export_kind == "statement" and not statement_word else ".docx")
+                if statement_word:
+                    html_source = temp_dir / "statement.html"
+                    html_source.write_bytes(sample_html(body.decode("utf-8")).encode("utf-8"))
+                    convert_office(html_source, working_output)
+                else:
+                    (export_normal_statement if export_kind == "statement" else export_normal_certificate)(working_output, export_payload)
             else:
                 source_path = editable_office_copy(selected.path)
                 working_output = output_path.with_suffix(source_path.suffix)

@@ -15,6 +15,7 @@ function fixture() {
   const requests = [];
   const ctx = vm.createContext({
     workspaceUI: null,
+    canGenerateStatements: () => true,
     form: { elements: { interest_rounding_places: precision, interest_rate: rate }, querySelectorAll: () => [precision, rate] },
     state: { currentStatement: { rows: [{ date: '2025-04-18' }] }, currentStatementSource: 'imported' },
     document: { getElementById: () => ({ value: 'automatic' }) },

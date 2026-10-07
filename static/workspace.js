@@ -1,5 +1,6 @@
 import { setupPdfImport } from './pdf-import.js?v=20261007-pdf';
 // Shared web workspace for the PHP and Python editions.
+import {canGenerateStatements, setupStatementPreview} from './preview-workspace.js?v=20261007-preview';
 export const DESCRIPTION_ORDERS = {
   label_plus_name: ['label','name'], name_plus_label: ['name','label'], name_only: ['name'],
   label_only: ['label'], extra_only: ['extra'], extra_name: ['extra','name'], name_extra: ['name','extra'],
@@ -71,7 +72,7 @@ export function createWorkspace(h) {
     localStorage.setItem('statement-sidebar-collapsed',String(collapsed));
   }
   toggleSidebar(innerWidth<1000 || localStorage.getItem('statement-sidebar-collapsed')==='true');
-  $('sidebar-toggle').onclick=()=>toggleSidebar(!document.body.classList.contains('sidebar-collapsed'));
+  $('sidebar-toggle').onclick=()=>{statementPreview.setExpanded(false);toggleSidebar(!document.body.classList.contains('sidebar-collapsed'));};
   backdrop.onclick=()=>toggleSidebar(true);
   document.addEventListener('keydown',e=>{if(e.key==='Escape' && innerWidth<1000) toggleSidebar(true);});
 
@@ -98,6 +99,7 @@ export function createWorkspace(h) {
   check.innerHTML+=`<div class="field-grid two-col"><label class="field"><span>Checking mode</span><select id="statement-check-mode"><option value="new">New / normal statement</option><option value="profile">Saved statement profile</option></select></label><label class="field" id="check-profile-field"><span>Statement profile</span><select id="check-profile-name"><option value="">No saved profile (normal check)</option></select></label><label class="field"><span>Interest rate (%)</span><input id="check-interest-rate" type="number" min="0" max="100" step="0.0001" data-proxy="interest_rate"></label><label class="field"><span>Tax rate (%)</span><input id="check-tax-rate" type="number" min="0" max="100" step="0.0001" data-proxy="tax_rate"></label></div><p id="check-mode-note">Checks dates, balances, cheque numbers, interest, tax, and deposit/withdrawal labels.</p><p class="muted">Interest: ROUND(Balance × Days × Rate / 36500, 2) per interval. Customer transactions may precede interest and tax on their posting date. An opening Balance B/F on that date carries the previous net balance.</p><div class="workspace-shortcuts"><button type="button" class="primary-button" data-click="import-statement-btn">Import Excel statement</button><button type="button" class="ghost-button" id="import-pdf-statement-btn">Import PDF Statement</button><button type="button" class="ghost-button" data-click="edit-statement-btn">Edit imported rows</button><button type="button" class="ghost-button" data-click="validate-statement-btn">Check statement</button><button type="button" class="ghost-button" data-tab="statement-panel">Review checking rules</button></div>`;
   $('check-mode-note').insertAdjacentHTML('beforebegin',`<div class="field-grid two-col"><label class="field"><span>Deposit Text (credit)</span><input id="check-deposit-text" data-proxy="deposit_text"></label><label class="field"><span>Withdraw Text (debit)</span><input id="check-withdrawal-text" data-proxy="withdrawal_text"></label><label class="field"><span>Interest Description Text</span><input id="check-interest-text" data-proxy="interest_text"></label><label class="field"><span>Tax Text</span><input id="check-tax-text" data-proxy="tax_text"></label><label class="check-field"><input type="checkbox" id="check-extra-enabled"> Check Extra Text (optional)</label><label class="field" id="check-extra-field" hidden><span>Extra Text</span><input id="check-extra-text" data-proxy="description_extra_text"></label></div><p class="muted">Description text is case-sensitive: uppercase and lowercase must match. Names, connector words, and text order are ignored on deposit and withdrawal rows. Saved profiles supply the text fields; edit the profile to change them.</p>`);
   const pdfImport=setupPdfImport({...h,pending:delta=>{requestCount=Math.max(0,requestCount+delta);}});
+  const statementPreview=setupStatementPreview({...h,pending:delta=>{requestCount=Math.max(0,requestCount+delta);}});
   $('import-pdf-statement-btn').onclick=()=>pdfImport.open();
   const saved=section('history-panel','Saved Statements','Load a statement to review, edit, check or export it.');
   saved.append($('admin-counts-card'),$('history-table').closest('.inset-panel'));
@@ -213,21 +215,23 @@ export function createWorkspace(h) {
   function navigate(next, force=false) {
     if(!force && requestCount>0) {h.log('Please wait for the current request to finish.');return false;}
     if(adminViews.has(next)&&!h.state.currentUser?.can_manage_users) next='home';
-    if(['generate','profiles'].includes(next)) switchContext('generate');
+    if(next==='generate' && !canGenerateStatements(h.state.currentUser)) next='profile-setup';
+    if(next!==view) statementPreview.setExpanded(false);
+    if(['generate','profiles','profile-setup'].includes(next)) switchContext('generate');
     if(next==='check')switchContext('check');
     view=next;document.body.dataset.workspaceView=next;document.body.dataset.statementContext=context;
     generationProfiles.hidden=next!=='generate';
-    $('workspace-title').textContent=titles[next]||'Statement workspace';
+    $('workspace-title').textContent=next==='profile-setup'?'Statement profile setup':titles[next]||'Statement workspace';
     const targets={home:'home-panel',generate:'account-panel',profiles:'profiles-panel',check:'check-panel',holidays:'holidays-panel',transfers:'export-panel',formats:'formats-panel',history:'history-panel',users:'admin-panel','create-user':'admin-panel',devices:'devices-panel'};
     h.setTab(targets[next]||'account-panel');
     $('admin-create-card').hidden=next!=='create-user';
     for(const id of ['admin-manage-card','admin-users-card','admin-restore-dates-card','admin-database-card'])if($(id))$(id).hidden=next!=='users';
     for(const button of sidebar.querySelectorAll('[data-view]')){const active=button.dataset.view===next;button.classList.toggle('is-active',active);if(active)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');}
-    document.querySelector('.controls-column > .toolbar').hidden=!['generate','check'].includes(next);
+    document.querySelector('.controls-column > .toolbar').hidden=!['generate','check','profile-setup'].includes(next);
     document.querySelector('.preview-column').hidden=!['generate','check','transfers','formats'].includes(next);
-    $('create-stat-btn').hidden=context==='check'||h.state.currentUser?.access_mode==='check_only';
+    $('create-stat-btn').hidden=context==='check'||!canGenerateStatements(h.state.currentUser);
     if(innerWidth<1000)toggleSidebar(true);
-    syncCheck(); return true;
+    statementPreview.refresh();syncCheck(); return true;
   }
   sidebar.addEventListener('click',e=>{const b=e.target.closest('[data-view]');if(b)navigate(b.dataset.view);});
   sidebar.querySelector('a').onclick=e=>{e.preventDefault();navigate('home');};
@@ -246,8 +250,8 @@ export function createWorkspace(h) {
     $('dashboard-chart').innerHTML=`<svg viewBox="0 0 720 220" role="img" aria-label="Generated statements ${period}: ${data.map(r=>`${r.label} ${r.count}`).join(', ')}"><line x1="40" y1="180" x2="680" y2="180" stroke="#d9e2ec"/><text x="8" y="45">${max}</text><text x="14" y="184">0</text><polyline points="${points}" fill="none" stroke="#176f62" stroke-width="3"/>${data.map((r,i)=>`<circle cx="${40+i*640/(data.length-1)}" cy="${180-r.count/max*140}" r="4" fill="#176f62"/><text x="${40+i*640/(data.length-1)}" y="209" text-anchor="middle">${r.label}</text>`).join('')}</svg>`;
   }
   return {
-    navigate, isChecking:()=>context==='check', pending(delta){requestCount=Math.max(0,requestCount+delta);},
-    values(values) {return checkingValues(values,context==='check',$('statement-check-mode').value,$('check-profile-name').value,$('check-extra-enabled').checked?'labels_extra':'labels');},
+    navigate, isChecking:()=>context==='check', refreshPreview:()=>statementPreview.refresh(), pending(delta){requestCount=Math.max(0,requestCount+delta);},
+    values(values) {return checkingValues(h.state.currentUser?.access_mode==='check_only'?{...values,prepend_statement_mode:'No'}:values,context==='check',$('statement-check-mode').value,$('check-profile-name').value,$('check-extra-enabled').checked?'labels_extra':'labels');},
     applied(values) {
       if(context==='check')$('check-extra-enabled').checked=values.description_check_scope==='labels_extra';
       if (context === "check" && values.statement_check_mode) { $("statement-check-mode").value=values.statement_check_mode; $("check-profile-name").value=values.check_profile_name || ""; }
@@ -256,7 +260,15 @@ export function createWorkspace(h) {
     },
     profiles(rows) {for(const id of ['check-profile-name','generation-profile-select']){const select=$(id),selected=select.value;select.replaceChildren(new Option(id==='check-profile-name'?'No saved profile (normal check)':'Select a saved profile',''));for(const row of rows||[]){const name=typeof row==='string'?row:row.name;if(name)select.add(new Option(name,name));}select.value=selected;}},
     history(payload){history=payload?.history||[];renderDashboard();},
-    user(user){sidebar.querySelectorAll('[data-admin-nav]').forEach(el=>el.hidden=!user?.can_manage_users);},
+    user(user){
+      sidebar.querySelectorAll('[data-admin-nav]').forEach(el=>el.hidden=!user?.can_manage_users);
+      const generate=canGenerateStatements(user);
+      document.body.classList.toggle('checker-only',user?.access_mode==='check_only');
+      sidebar.querySelector('[data-view="generate"]').hidden=!generate;
+      home.querySelector('[data-go="generate"]').hidden=!generate;
+      document.querySelector('.prepend-statement-panel').hidden=!generate;
+      statementPreview.refresh();
+    },
     managedUser(user){for(const key of ['full_name','mobile_number','email','address','gender'])$(`detail-${key}`).value=user?.[key]||'';for(const key of ['is_hidden','is_blocked'])$(`detail-${key}`).checked=Boolean(user?.[key]);},
     reset(values={}) {pdfImport.reset();checkProfileRevision++;$('check-extra-enabled').checked=false;$('generation-profile-select').value='';drafts={};defaults=clone(values);context='generate';requestCount=0; $('statement-check-mode').value='new';$('check-profile-name').value='';syncDescriptions();renderDashboard();navigate('home',true);},
     prepareImport() {if(!navigate('check'))throw new Error('Wait for the current request before importing.');if($('statement-check-mode').value==='profile'&&!$('check-profile-name').value)throw new Error('Select a saved statement profile before importing.');},

@@ -161,3 +161,13 @@ Export & Import includes normal and selected-template exports, A4 print preview,
 Native normal letterhead downloads require `openpyxl`, `python-docx`, and `lxml`: `python -m pip install openpyxl python-docx lxml`. Template export and legacy `.xls` / `.doc` conversion retain their existing Office engine requirements.
 
 PDF and scanned statement import is available under **Statement Check > Import PDF Statement**. Review OCR rows, download the extracted Excel workbook, or import directly into the existing checker. See [PDF_IMPORT.md](PDF_IMPORT.md) for supported layouts, limits and hosting setup.
+
+## Statement preview and checker-only access
+
+When a statement opens on a configured interest/tax posting date, its opening balance is already settled. Generation and recalculation retain that date (including weekend posting dates), omit opening-day interest and tax, and accrue forward to the next posting. Customer transactions still follow the existing date restrictions.
+
+Checker-only users can import Excel or PDF statements, check and correct rows, manage statement profiles, and export or print their imported statements. Generation and Add Statement Before are denied on the server. Edit/check/export requests require the saved imported statement ID and its ownership; changing the client source label does not grant generation access.
+
+The SAMPLE Statement Preview includes Excel, Word, Print preview, Print, and saved-format export controls. Normal Word exports the statement table, while balance certificate exports remain in Export and Print. Save row changes with Update & Recalculate before exporting. The existing Office-compatible normal `.xls` / `.doc` exports need no desktop Office; embedded letterhead conversion keeps its existing Office dependency.
+
+Use Full-width view to hide the setup and navigation panels. Show setup panel or Escape restores the normal layout. The same controls work in Statement Generation and Statement Check, without replacing saved profiles.

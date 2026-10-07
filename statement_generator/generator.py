@@ -1400,17 +1400,18 @@ def _reconcile_plan(
     rng: random.Random,
     enforce_max_rows: bool = True,
     amount_mix: dict | None = None,
+    accrual_start: date | None = None,
 ) -> tuple[list[StatementRow], StatementSummary, float, date]:
     constraints = assign_rounding(plan, config, rng, amount_mix)
     # Every transaction may need an adjustment, plus room for interest corrections.
     for _ in range(len(plan) + 40):
         result = simulate_statement(config, plan, opening_business_date, ending_business_date,
-                                    quarter_schedule, rng, enforce_max_rows=enforce_max_rows)
+                                    quarter_schedule, rng, enforce_max_rows=enforce_max_rows, accrual_start=accrual_start)
         delta = round_money(config.target_closing_balance - result[2])
         if abs(delta) <= 100 or not adjust_plan(plan, config, constraints, delta, ending_business_date, rng):
             return result
     return simulate_statement(config, plan, opening_business_date, ending_business_date,
-                              quarter_schedule, rng, enforce_max_rows=enforce_max_rows)
+                              quarter_schedule, rng, enforce_max_rows=enforce_max_rows, accrual_start=accrual_start)
 
 
 def _manual_plan_from_rows(
@@ -1436,7 +1437,7 @@ def _manual_plan_from_rows(
         if not isinstance(row, dict):
             continue
         category = str(row.get("category", "")).strip()
-        if category in {"interest", "tax"} or (imported_check and category == "opening"):
+        if category in {"interest", "tax", "opening"}:
             continue
         debit = round_money(float(row.get("debit", 0) or 0))
         credit = round_money(float(row.get("credit", 0) or 0))
@@ -1797,6 +1798,13 @@ def validate_edited_statement(config: StatementConfig, edited_rows: list[dict[st
     return errors
 
 
+def _opening_date(config: StatementConfig) -> date:
+    # Opening balances on bank posting dates already include interest and tax.
+    if build_quarter_schedule(config.start_date, config.start_date, set(), config.quarter_date_overrides):
+        return config.start_date
+    return resolve_business_day(config.start_date, config.holiday_dates)
+
+
 def _generate_statement_result(
     config: StatementConfig,
     *,
@@ -1809,7 +1817,7 @@ def _generate_statement_result(
     validate_amount_mix(config)
     seed = config.seed if config.seed is not None else random.SystemRandom().randint(10_000_000, 99_999_999)
     seed += seed_offset
-    opening_business_date = resolve_business_day(config.start_date, config.holiday_dates)
+    opening_business_date = _opening_date(config)
     ending_business_date = resolve_business_day(config.end_date, config.holiday_dates)
     last_error: Exception | None = None
 
@@ -1822,6 +1830,8 @@ def _generate_statement_result(
                 config.holiday_dates,
                 config.quarter_date_overrides,
             )
+            opening_on_posting_date = any(posting == opening_business_date for _, posting in quarter_schedule)
+            quarter_schedule = [(actual, posting) for actual, posting in quarter_schedule if posting != opening_business_date]
             plan, amount_mix = _create_transaction_plan(config, opening_business_date, ending_business_date, quarter_schedule, rng)
             rows, summary, final_balance, last_transaction_date = _reconcile_plan(
                 config,
@@ -1832,6 +1842,7 @@ def _generate_statement_result(
                 rng,
                 enforce_max_rows=enforce_max_rows,
                 amount_mix=amount_mix,
+                accrual_start=opening_business_date if opening_on_posting_date else None,
             )
             if enforce_target_tolerance and abs(final_balance - config.target_closing_balance) > 3_000:
                 raise ValueError("Unable to reach the requested closing balance with the amount limits, rounding mix, and two-occurrence limit. Adjust the target, amount limits, or transaction count.")
@@ -2057,7 +2068,7 @@ def recalculate_edited_statement(config: StatementConfig, edited_rows: list[dict
         return _recalculate_with_prepend(config, edited_rows)
     if imported_check:
         edited_rows = _imported_check_rows(config, edited_rows)
-    opening_business_date = config.start_date if imported_check else resolve_business_day(config.start_date, config.holiday_dates)
+    opening_business_date = config.start_date if imported_check else _opening_date(config)
     ending_business_date = config.end_date if imported_check else resolve_business_day(config.end_date, config.holiday_dates)
     quarter_schedule = build_quarter_schedule(
         opening_business_date,
@@ -2066,8 +2077,8 @@ def recalculate_edited_statement(config: StatementConfig, edited_rows: list[dict
         config.quarter_date_overrides,
     )
     opening_on_posting_date = bool(
-        imported_check and edited_rows and edited_rows[0].get("category") == "opening"
-        and str(edited_rows[0].get("date", "")) == iso_date(opening_business_date)
+        (not imported_check or (edited_rows and edited_rows[0].get("category") == "opening"
+        and str(edited_rows[0].get("date", "")) == iso_date(opening_business_date)))
         and any(posting == opening_business_date for _, posting in quarter_schedule)
     )
     if opening_on_posting_date:

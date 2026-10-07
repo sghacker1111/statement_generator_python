@@ -194,7 +194,7 @@ class ImportCheckTests(unittest.TestCase):
 
         class Handler(web.StatementWebHandler):
             def _require_statement_user(self):
-                return SimpleNamespace(id=7)
+                return SimpleNamespace(id=7, access_mode='unlimited')
 
             def log_message(self, *_args):
                 pass
@@ -263,11 +263,17 @@ class ImportCheckTests(unittest.TestCase):
                                            body if body is not None else None if payload is None else json.dumps(payload),
                                            {"Authorization": f"Bearer {token}", "Content-Type": content_type})
                         response = connection.getresponse()
-                        return response.status, json.loads(response.read())
+                        raw = response.read()
+                        return response.status, json.loads(raw) if response.getheader('Content-Type', '').startswith('application/json') else raw
                     finally:
                         connection.close()
 
                 try:
+                    with patch.object(web, 'generate_statement', side_effect=AssertionError('Generator must not run for checker-only users')):
+                        status, denied = request('/api/generate', form)
+                        self.assertEqual(status, 403, denied)
+                        status, denied = request('/api/export', {'config': form, 'export_kind': 'statement', 'export_mode': 'normal'})
+                        self.assertEqual(status, 403, denied)
                     boundary = "sg-import-regression-boundary"
                     body = (
                         f'--{boundary}\r\nContent-Disposition: form-data; name="config"\r\n\r\n{json.dumps(form)}\r\n'
@@ -299,6 +305,26 @@ class ImportCheckTests(unittest.TestCase):
                     self.assertEqual([(row["date"], row["credit"], row["debit"]) for row in updated["rows"] if row["category"] in {"interest", "tax"}],
                                      [("2024-10-17", 9300, 0), ("2024-10-17", 0, 558)])
                     self.assertEqual(updated["rows"][-1]["balance"], 383742)
+
+                    with patch.object(web, 'generate_statement', side_effect=AssertionError('Checker export must never generate')):
+                        for file_type, expected_suffix in [('excel', '.xls'), ('word', '.doc')]:
+                            export_request = {**payload, 'result_payload': updated, 'export_kind': 'statement',
+                                              'export_mode': 'normal', 'statement_file_type': file_type,
+                                              'rate_mode': 'Manual', 'manual_rate': '140'}
+                            status, exported = request('/api/export', export_request)
+                            self.assertEqual(status, 200, exported)
+                            self.assertIn(b'Transfer in', exported)
+                            self.assertIn(b'383,742', exported)
+                        for invalid in ({**export_request, 'result_payload': None},
+                                        {**export_request, 'source_type': 'generated'},
+                                        {**export_request, 'statement_id': 0}):
+                            status, denied = request('/api/export', invalid)
+                            self.assertEqual(status, 403, denied)
+                    for invalid in ({**payload, 'source_type': 'generated'},
+                                    {**payload, 'statement_id': 0},
+                                    {**payload, 'config': {**payload['config'], 'prepend_statement_mode': 'Yes'}}):
+                        status, denied = request('/api/recalculate_statement', invalid)
+                        self.assertEqual(status, 403, denied)
 
                     status, detail = request(f'/api/statement_detail?id={imported["statement_id"]}')
                     self.assertEqual(status, 200, detail)

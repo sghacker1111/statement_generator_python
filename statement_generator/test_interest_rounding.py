@@ -17,6 +17,27 @@ from .utils import interest_rounding_places
 
 
 class InterestRoundingTests(unittest.TestCase):
+    def test_generated_opening_posting_date_is_already_settled(self):
+        from .generator import generate_statement, recalculate_edited_statement
+        from dataclasses import asdict
+        for start, end, overrides in [
+            (date(2025, 7, 16), date(2025, 10, 20), {}),
+            (date(2026, 10, 17), date(2027, 1, 18), {}),
+            (date(2025, 7, 18), date(2025, 10, 20), {'2025-07': '2025-07-18'}),
+        ]:
+            config = replace(selftest.GeneratorTests().build_config(), start_date=start, end_date=end,
+                             opening_balance=1000000, target_closing_balance=1200000,
+                             quarter_date_overrides=overrides, holiday_dates=set(), seed=731)
+            result = generate_statement(config)
+            self.assertEqual(result.rows[0].date, start)
+            self.assertEqual(result.rows[0].balance, config.opening_balance)
+            self.assertTrue(all(row.date > start for row in result.rows[1:]))
+            self.assertTrue(any(row.category == 'interest' for row in result.rows))
+            rows = [{**asdict(row), 'date': row.date.isoformat()} for row in result.rows]
+            updated = recalculate_edited_statement(config, rows)
+            self.assertEqual(updated.final_balance, result.final_balance)
+            self.assertEqual(validate_edited_statement(config, rows), [])
+
     def config(self, places):
         return replace(selftest.GeneratorTests().build_config(), interest_rounding_places=places,
                        start_date=date(2025, 4, 18), end_date=date(2025, 7, 20),
@@ -166,11 +187,9 @@ class InterestRoundingTests(unittest.TestCase):
                             body = json.loads(response.read())
                             self.assertEqual(response.status, 200, body)
                             interest_rows = [row for row in body["rows"] if row["category"] == "interest"]
-                            if source == "imported":
-                                self.assertEqual(interest_rows, [])
-                                self.assertEqual(body["final_balance"], 1000)
-                            else:
-                                self.assertEqual(interest_rows[0]["credit"], 25.75)
+                            self.assertEqual(interest_rows, [])
+                            # Generated statements now carry the same settled opening balance.
+                            self.assertEqual(body["final_balance"], 1000)
                             self.assertEqual(body["source_type"], source)
                         finally:
                             connection.close()
