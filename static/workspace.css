@@ -23,6 +23,7 @@ body:not(.auth-locked) .page-shell{width:auto;min-width:0;max-width:none;margin:
 .pdf-import-panel{padding:18px;margin-top:22px}.pdf-import-panel .table-shell{max-height:520px;overflow:auto}.pdf-import-panel td input{min-width:82px;width:100%;padding:8px;border:1px solid #cbd6df;border-radius:4px}.pdf-import-panel td input[data-field="description"]{min-width:220px}.pdf-import-panel input[aria-invalid="true"]{border:2px solid #c32d35;background:#fff1f2}.pdf-import-panel li{font-size:12px;margin:5px 0}.pdf-import-panel #pdf-progress{font-weight:600}
 
 .pdf-import-panel td{padding:6px}.pdf-import-panel td button{padding:5px;font-size:11px;white-space:nowrap}
+.pdf-import-panel #pdf-mode-help{display:block;margin:8px 0}.pdf-review-notice,.statement-corrections{padding:16px;margin-bottom:16px}.correction-choice{display:flex;align-items:start;gap:10px;padding:12px 0;border-bottom:1px solid var(--workspace-border);font-size:13px}.correction-choice input{flex:0 0 auto;width:auto;margin-top:3px}.statement-corrections p{font-size:13px;line-height:1.6}.statement-corrections>div:has(.correction-choice){max-height:320px;overflow:auto}
 
 /* Keep the statement in place while hiding the setup and navigation panels. */
 .statement-preview-tools{border-top:1px solid var(--workspace-border);border-bottom:1px solid var(--workspace-border);padding:16px 0;margin:14px 0}

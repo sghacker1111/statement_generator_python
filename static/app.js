@@ -1,4 +1,4 @@
-import { createWorkspace } from "./workspace.js?v=20261008-ocr";
+import { createWorkspace } from "./workspace.js?v=20261008-detailed";
 import { canGenerateStatements } from "./preview-workspace.js?v=20261007-preview";
 let workspaceUI = null;
 let authBusy = false;
@@ -4391,12 +4391,17 @@ async function recalculateEditedStatement() {
   appendLog(`Updated statement after edit. New final balance ${payload.summary.final_balance_text}, issue date ${payload.summary.issue_date}.`);
 }
 
-async function importStatementFile(file) {
+async function importStatementFile(file, options = {}) {
   if (!file) {
     throw new Error("Select an Excel statement file first.");
   }
   workspaceUI?.prepareImport();
-  await requestImportedInterestRateAndRecheck(true);
+  if (options.useCurrentRate) {
+    const rate = String(getFormValues().interest_rate ?? '').trim();
+    if (!rate || !Number.isFinite(Number(rate)) || Number(rate) < 0 || Number(rate) > 100) {
+      throw new Error('Enter the statement interest rate (0 to 100) in Statement Check, then import again.');
+    }
+  } else await requestImportedInterestRateAndRecheck(true);
   const body = new FormData();
   body.append("statement_file", file);
   body.append("config", JSON.stringify(getFormValues()));
@@ -5445,6 +5450,13 @@ workspaceUI = createWorkspace({
   state, apiUrl, fetchJson, requestPassword, setTab, getValues:getFormValues, applyValues:applyFormValues,
   clearStatement:clearCurrentStatement, saveDraft:saveDraftProfile, scheduleSave:scheduleAutoProfileSave,
   renderUsers, log:appendLog, loadProfile:loadProfileFormat, importStatement:importStatementFile,
+  validateStatement:validateCurrentStatement,
+  beginCorrectionEdit() {
+    if (state.statementEditMode) return;
+    const errors = state.validationErrors;
+    enableStatementEditMode();
+    renderValidationResults(errors);
+  },
   exportStatement(format, template) {
     return requestDownload({...buildExportPayload("statement", template ? "template" : "normal", template), statement_file_type:format === "word" ? "word" : "excel"}, "Statement");
   },

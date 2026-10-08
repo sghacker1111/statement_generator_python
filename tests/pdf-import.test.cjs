@@ -189,3 +189,27 @@ test('page merge keeps review warnings on their actual transaction after removin
  {rows:[{...carry,description:'Balance B/F'},{...carry,date:'2026-10-08',description:'Deposit',credit:'500',balance:'1500'}],issues:[{row_index:0,fields:['description'],message:'Repeated carry warning'},{row_index:1,fields:['credit'],message:'Real transaction warning'}]}]);
  assert.equal(merged.rows.length,2);assert.deepEqual(merged.issues,[{row_index:1,fields:['credit'],message:'Real transaction warning'}]);
 });
+
+test('individual cells stay in their column and include wrapped text without the next transaction',async()=>{
+ const {extractPage,columnRegions,cellRegion,refineCell}=await api;
+ const parsed=extractPage([...header(30),...row('07-Oct-2026','Deposited By:','','500','1500',55),word('Person A',120,67),...row('08-Oct-2026','Withdrawn By: B','100','','1400',92)],1);
+ const region=columnRegions(parsed,600,800).find(r=>r.key==='description');
+ const cell=cellRegion(parsed.rows,0,region);
+ assert.equal(cell.x,region.x);assert.equal(cell.width,region.width);
+ assert.ok(cell.y<=55);assert.ok(cell.y+cell.height>=77);assert.ok(cell.y+cell.height<92);assert.equal(cell.singleLine,false);
+ const result=refineCell(parsed,0,'description',[word('Deposited By:',120,57),word('Person Alpha',120,69)]);
+ assert.equal(result.rows[1].description,'Withdrawn By: B');
+ assert.ok(result.issues.some(i=>i.row_index===0&&i.suggestion?.value==='Deposited By: Person Alpha'));
+ assert.equal(result.rows[0].credit,'500.00');
+});
+
+test('recognition mode is explicit and the detailed model is pinned and bundled locally',async()=>{
+ const {readStatementPdf,detailedCore}=await import(pathToFileURL(path.join(root,assets,'pdf-import.js')).href);
+ assert.equal(detailedCore(()=>true),'tesseract-core-simd-lstm.wasm.js');
+ assert.equal(detailedCore(()=>false),'tesseract-core-lstm.wasm.js');
+ assert.equal(detailedCore(),'tesseract-core-simd-lstm.wasm.js');
+ await assert.rejects(readStatementPdf({name:'sample.pdf',size:1},{mode:'unknown'}),/Standard or Detailed/);
+ const crypto=require('node:crypto');
+ const model=fs.readFileSync(path.join(root,assets,'vendor/pdf-ocr/best/eng.traineddata.gz'));
+ assert.equal(crypto.createHash('sha256').update(model).digest('hex'),'49f91555a699ea3f2d0aae1409cc9ced559066ac41163d943cbdd4940c37833b');
+});

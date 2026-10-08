@@ -67,6 +67,13 @@ test('import captures checking context and interest before sending the file',asy
   vm.runInContext(match[0],context);await context.importStatementFile({name:'sample.xlsx'});
   assert.deepEqual(calls.slice(0,2),[['check-context'],['rate',true]]);
   assert.ok(calls.find(row=>row[0]==='field'&&row[1]==='config')[2].includes('Existing'));
+  const automated=calls.length;
+  await context.importStatementFile({name:'converted.xlsx'},{useCurrentRate:true});
+  assert.equal(calls.slice(automated).some(row=>row[0]==='rate'),false,'PDF auto import uses the visible checking rate without a second prompt');
+  context.getFormValues=()=>({interest_rate:'invalid'});
+  const invalid=calls.length;
+  await assert.rejects(context.importStatementFile({name:'invalid.xlsx'},{useCurrentRate:true}),/interest rate/);
+  assert.equal(calls.slice(invalid).some(row=>row[0]==='request'),false);
   const before=calls.length;context.requestImportedInterestRateAndRecheck=async()=>{throw new Error('cancelled');};
   await assert.rejects(context.importStatementFile({name:'cancelled.xlsx'}),/cancelled/);
   assert.equal(calls.length,before+1);

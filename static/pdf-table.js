@@ -135,7 +135,7 @@ export function extractPage(words, page, previousColumns=null, dateOrder='dmy') 
     const reading=readDate(texts.date,dateOrder),date=reading.date, hasAmounts=['debit','credit','balance'].some(k=>texts[k]&&!blankMoney.test(texts[k]));
     const looksDate=/\d.*[-/.]/.test(texts.date) || /^\d{1,2}\s+[A-Za-z]{3}/.test(texts.date);
     if((date || looksDate || (texts.description && texts.balance)) && hasAmounts) {
-      const row={...texts,date:date||texts.date,date_normalized:Boolean(date),raw_date:texts.date,page,y:line.center,height:line.height,confidence:Math.min(...line.words.map(w=>w.confidence??100)),cell_bounds:Object.fromEntries(KEYS.filter(k=>cells[k].length).map(k=>[k,{x0:Math.min(...cells[k].map(w=>w.x0)),x1:Math.max(...cells[k].map(w=>w.x1))}]))};
+      const row={...texts,date:date||texts.date,date_normalized:Boolean(date),raw_date:texts.date,page,y:line.center,y0:line.y0,y1:line.y1,height:line.y1-line.y0,confidence:Math.min(...line.words.map(w=>w.confidence??100)),cell_bounds:Object.fromEntries(KEYS.filter(k=>cells[k].length).map(k=>[k,{x0:Math.min(...cells[k].map(w=>w.x0)),x1:Math.max(...cells[k].map(w=>w.x1))}]))};
       if(!date)issues.push({row_index:rows.length,fields:['date'],message:`Page ${page}: review unreadable date "${texts.date}".`});
       if(reading.corrected)issues.push({row_index:rows.length,fields:['date'],message:`Page ${page}: OCR month "${texts.date}" interpreted as ${date}. Verify against the PDF.`});
       for(const key of ['debit','credit','balance']) {
@@ -146,7 +146,7 @@ export function extractPage(words, page, previousColumns=null, dateOrder='dmy') 
       if(row.confidence<75)issues.push({row_index:rows.length,fields:KEYS.filter(k=>cells[k].some(w=>(w.confidence??100)<75)),message:`Page ${page}: OCR confidence is low; compare this row with the PDF.`});
       rows.push(row);lastY=line.y1;
     } else if(!texts.date && !hasAmounts && texts.description && !texts.cheque_no && rows.length && line.y0-lastY<Math.max(18,line.height*2)) {
-      rows.at(-1).description+=' '+texts.description;lastY=line.y1;
+      rows.at(-1).description+=' '+texts.description;rows.at(-1).y1=line.y1;lastY=line.y1;
     } else if(hasAmounts && (texts.description || texts.date) && !/^(?:page|total|summary)\b/i.test(full)) {
       // Do not silently lose a transaction whose date was missed by OCR.
       issues.push({page,fields:['date'],message:`Page ${page}: a possible row has no readable date: ${full.slice(0,180)}. Check the PDF before importing.`});
@@ -213,8 +213,34 @@ export function columnRegions(result, width, height) {
     const left=Math.min(next.x0,...result.rows.map(r=>r.cell_bounds?.[next.key]?.x0??next.x0));
     return right<left?(right+left)/2:column.key==='description'?next.x0-6:(column.x1+next.x0)/2;
   });
-  const y=Math.max(0,result.rows[0].y-Math.max(8,result.rows[0].height)),bottom=Math.min(height,result.rows.at(-1).y+Math.max(10,result.rows.at(-1).height));
+  const first=result.rows[0],last=result.rows.at(-1);
+  const y=Math.max(0,(first.y0??first.y-first.height/2)-6),bottom=Math.min(height,(last.y1??last.y+last.height/2)+6);
   return columns.map((column,i)=>{const x=i?edges[i-1]:Math.max(0,Math.min(column.x0,...result.rows.map(r=>r.cell_bounds?.[column.key]?.x0??column.x0))-8);return {key:column.key,x,y,width:(edges[i]??width)-x,height:bottom-y};}).filter(r=>r.width>0&&r.height>0);
+}
+
+// Bound every cell by its own column and the space between adjacent rows.
+// Include ascenders/descenders and wrapped descriptions instead of clipping a
+// fixed number of pixels around a line's first recognized word.
+export function cellRegion(rows,index,region) {
+  const row=rows[index],previous=rows[index-1],next=rows[index+1];
+  const top=r=>r.y0??r.y-(r.height||10)/2;
+  const bottom=r=>r.y1??r.y+(r.height||10)/2;
+  const y=Math.max(region.y,previous?(bottom(previous)+top(row))/2:top(row)-6);
+  const end=Math.min(region.y+region.height,next?(bottom(row)+top(next))/2:bottom(row)+6);
+  return {...region,y,height:Math.max(1,end-y),singleLine:bottom(row)-top(row)<(row.height||10)*1.6};
+}
+
+export function refineCell(result,index,key,words,dateOrder='dmy',source='cell OCR') {
+  const row=result.rows[index];
+  if(!row||!words.length)return result;
+  const lines=groupLines(words),raw=lines.map(line=>cellText(line.words)).join(' ');
+  // Treat the crop as one cell, including wrapped text. Never borrow words from
+  // a neighbouring row to satisfy an expected description or running balance.
+  const height=row.height||10;
+  const synthetic=[{text:raw,x0:0,x1:1,y0:row.y-height/2,y1:row.y+height/2,confidence:Math.min(...words.map(w=>w.confidence??100))}];
+  const refined=refineColumn({...result,rows:[row],issues:[]},key,synthetic,dateOrder,source);
+  const rows=[...result.rows];rows[index]=refined.rows[0];
+  return {...result,rows,issues:[...result.issues,...refined.issues.map(issue=>({...issue,row_index:index}))]};
 }
 
 export function refineColumn(result,key,words,dateOrder='dmy',source='column OCR') {

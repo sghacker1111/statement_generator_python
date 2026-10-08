@@ -8,7 +8,9 @@ Self-hosted browser libraries. No document is sent to an OCR service.
 - @tesseract.js-data/eng 1.0.0, 4.0.0_best_int (Apache-2.0; tesseract-ocr/tessdata_best)
 - fflate 0.8.2 (MIT)
 
-Packages obtained from npm. Files are copied unmodified; retain accompanying licenses.
+Runtime packages and the compact model were obtained from npm and copied unmodified. Retain accompanying licenses.
+
+Detailed mode additionally bundles the official floating-point English model from [tesseract-ocr/tessdata_best](https://github.com/tesseract-ocr/tessdata_best/tree/e12c65a915945e4c28e237a9b52bc4a8f39a0cec), pinned at `e12c65a915945e4c28e237a9b52bc4a8f39a0cec` (Apache-2.0; `best/LICENSE`). The original `eng.traineddata` SHA-256 is `8280aed0782fe27257a68ea10fe7ef324ca0f8d85bd2fd145d1c2b560bcb66ba`. It is gzip-compressed with mtime 0 for browser loading; model data is unmodified. Detailed mode uses ordinary SIMD with a portable LSTM fallback to avoid the Tesseract.js 7 relaxed-SIMD float-model abort documented in [upstream issue 1080](https://github.com/naptha/tesseract.js/issues/1080). Standard mode retains automatic core selection.
 
 ## SHA-256
 
@@ -444,3 +446,7 @@ Packages obtained from npm. Files are copied unmodified; retain accompanying lic
 
 `45f54171aeaa1d10c0c1a66f374b7bba1f02472b1487fbe892eec04f840002ac`  worker.min.js.LICENSE.txt
 
+
+`49f91555a699ea3f2d0aae1409cc9ced559066ac41163d943cbdd4940c37833b`  best/eng.traineddata.gz
+
+`a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9`  best/LICENSE

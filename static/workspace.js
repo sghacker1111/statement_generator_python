@@ -1,4 +1,5 @@
-import { setupPdfImport } from './pdf-import.js?v=20261008-ocr';
+import { setupPdfImport } from './pdf-import.js?v=20261008-detailed';
+import { setupStatementCorrections } from './statement-corrections.js?v=20261008-detailed';
 // Shared web workspace for the PHP and Python editions.
 import {canGenerateStatements, setupStatementPreview} from './preview-workspace.js?v=20261007-preview';
 export const DESCRIPTION_ORDERS = {
@@ -98,8 +99,9 @@ export function createWorkspace(h) {
   const check=section('check-panel','Statement Check','Import an Excel or PDF statement, select its checking rules, then review or edit the rows. Your generation draft is kept separately.');
   check.innerHTML+=`<div class="field-grid two-col"><label class="field"><span>Checking mode</span><select id="statement-check-mode"><option value="new">New / normal statement</option><option value="profile">Saved statement profile</option></select></label><label class="field" id="check-profile-field"><span>Statement profile</span><select id="check-profile-name"><option value="">No saved profile (normal check)</option></select></label><label class="field"><span>Interest rate (%)</span><input id="check-interest-rate" type="number" min="0" max="100" step="0.0001" data-proxy="interest_rate"></label><label class="field"><span>Tax rate (%)</span><input id="check-tax-rate" type="number" min="0" max="100" step="0.0001" data-proxy="tax_rate"></label></div><p id="check-mode-note">Checks dates, balances, cheque numbers, interest, tax, and deposit/withdrawal labels.</p><p class="muted">Interest: ROUND(Balance × Days × Rate / 36500, 2) per interval. Customer transactions may precede interest and tax on their posting date. An opening Balance B/F on that date carries the previous net balance.</p><div class="workspace-shortcuts"><button type="button" class="primary-button" data-click="import-statement-btn">Import Excel statement</button><button type="button" class="ghost-button" id="import-pdf-statement-btn">Import PDF Statement</button><button type="button" class="ghost-button" data-click="edit-statement-btn">Edit imported rows</button><button type="button" class="ghost-button" data-click="validate-statement-btn">Check statement</button><button type="button" class="ghost-button" data-tab="statement-panel">Review checking rules</button></div>`;
   $('check-mode-note').insertAdjacentHTML('beforebegin',`<div class="field-grid two-col"><label class="field"><span>Deposit Text (credit)</span><input id="check-deposit-text" data-proxy="deposit_text"></label><label class="field"><span>Withdraw Text (debit)</span><input id="check-withdrawal-text" data-proxy="withdrawal_text"></label><label class="field"><span>Interest Description Text</span><input id="check-interest-text" data-proxy="interest_text"></label><label class="field"><span>Tax Text</span><input id="check-tax-text" data-proxy="tax_text"></label><label class="check-field"><input type="checkbox" id="check-extra-enabled"> Check Extra Text (optional)</label><label class="field" id="check-extra-field" hidden><span>Extra Text</span><input id="check-extra-text" data-proxy="description_extra_text"></label></div><p class="muted">Description text is case-sensitive: uppercase and lowercase must match. Names, connector words, and text order are ignored on deposit and withdrawal rows. Saved profiles supply the text fields; edit the profile to change them.</p>`);
-  const pdfImport=setupPdfImport({...h,pending:delta=>{requestCount=Math.max(0,requestCount+delta);}});
+  const pdfImport=setupPdfImport({...h,pending:delta=>{requestCount=Math.max(0,requestCount+delta);},showStatement:()=>{statementPreview.setExpanded(false);document.querySelector('.preview-panel').scrollIntoView({block:'start'});},showSetup:()=>{statementPreview.setExpanded(false);}});
   const statementPreview=setupStatementPreview({...h,pending:delta=>{requestCount=Math.max(0,requestCount+delta);}});
+  const statementCorrections=setupStatementCorrections({...h,pending:delta=>{requestCount=Math.max(0,requestCount+delta);}});
   $('import-pdf-statement-btn').onclick=()=>pdfImport.open();
   const saved=section('history-panel','Saved Statements','Load a statement to review, edit, check or export it.');
   saved.append($('admin-counts-card'),$('history-table').closest('.inset-panel'));
@@ -250,7 +252,7 @@ export function createWorkspace(h) {
     $('dashboard-chart').innerHTML=`<svg viewBox="0 0 720 220" role="img" aria-label="Generated statements ${period}: ${data.map(r=>`${r.label} ${r.count}`).join(', ')}"><line x1="40" y1="180" x2="680" y2="180" stroke="#d9e2ec"/><text x="8" y="45">${max}</text><text x="14" y="184">0</text><polyline points="${points}" fill="none" stroke="#176f62" stroke-width="3"/>${data.map((r,i)=>`<circle cx="${40+i*640/(data.length-1)}" cy="${180-r.count/max*140}" r="4" fill="#176f62"/><text x="${40+i*640/(data.length-1)}" y="209" text-anchor="middle">${r.label}</text>`).join('')}</svg>`;
   }
   return {
-    navigate, isChecking:()=>context==='check', refreshPreview:()=>statementPreview.refresh(), pending(delta){requestCount=Math.max(0,requestCount+delta);},
+    navigate, isChecking:()=>context==='check', refreshPreview:()=>{statementPreview.refresh();statementCorrections.refresh();pdfImport.refresh();}, pending(delta){requestCount=Math.max(0,requestCount+delta);},
     values(values) {return checkingValues(h.state.currentUser?.access_mode==='check_only'?{...values,prepend_statement_mode:'No'}:values,context==='check',$('statement-check-mode').value,$('check-profile-name').value,$('check-extra-enabled').checked?'labels_extra':'labels');},
     applied(values) {
       if(context==='check')$('check-extra-enabled').checked=values.description_check_scope==='labels_extra';
@@ -270,7 +272,7 @@ export function createWorkspace(h) {
       statementPreview.refresh();
     },
     managedUser(user){for(const key of ['full_name','mobile_number','email','address','gender'])$(`detail-${key}`).value=user?.[key]||'';for(const key of ['is_hidden','is_blocked'])$(`detail-${key}`).checked=Boolean(user?.[key]);},
-    reset(values={}) {pdfImport.reset();checkProfileRevision++;$('check-extra-enabled').checked=false;$('generation-profile-select').value='';drafts={};defaults=clone(values);context='generate';requestCount=0; $('statement-check-mode').value='new';$('check-profile-name').value='';syncDescriptions();renderDashboard();navigate('home',true);},
+    reset(values={}) {pdfImport.reset();statementCorrections.reset();checkProfileRevision++;$('check-extra-enabled').checked=false;$('generation-profile-select').value='';drafts={};defaults=clone(values);context='generate';requestCount=0; $('statement-check-mode').value='new';$('check-profile-name').value='';syncDescriptions();renderDashboard();navigate('home',true);},
     prepareImport() {if(!navigate('check'))throw new Error('Wait for the current request before importing.');if($('statement-check-mode').value==='profile'&&!$('check-profile-name').value)throw new Error('Select a saved statement profile before importing.');},
   };
 }
