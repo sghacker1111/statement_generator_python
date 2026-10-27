@@ -93,7 +93,7 @@ def resolve_exchange_rate(
 def build_payload(
     config: StatementConfig,
     result: StatementResult,
-    exchange_rate: ExchangeRateResult,
+    exchange_rate: ExchangeRateResult | None,
     imported_check: bool = False,
 ) -> dict:
     errors = validate_transaction_dates(config, [asdict(row) for row in result.rows], imported_check)
@@ -104,7 +104,9 @@ def build_payload(
         return f"{float(value):.{decimals}f}"
 
     total_balance_npr = result.final_balance
-    equivalent_usd = round(total_balance_npr / exchange_rate.rate, 2)
+    # A transaction statement needs no USD conversion. Certificate exports must
+    # supply an actual automatic or manual rate; never substitute a made-up rate.
+    equivalent_usd = round(total_balance_npr / exchange_rate.rate, 2) if exchange_rate is not None else None
     total_debit = round(sum(float(row.debit) for row in result.rows), 2)
     total_credit = round(sum(float(row.credit) for row in result.rows), 2)
     rows = [
@@ -162,11 +164,11 @@ def build_payload(
         "rates": {
             "interest_rate": num_text(config.interest_rate, 4).rstrip("0").rstrip("."),
             "tax_rate": num_text(config.tax_rate, 4).rstrip("0").rstrip("."),
-            "usd_npr": num_text(exchange_rate.rate, 4),
-            "usd_npr_text": f"{exchange_rate.rate:,.2f}",
-            "rate_type": exchange_rate.rate_type,
-            "source_label": exchange_rate.source_label,
-            "source_date_iso": iso_date(exchange_rate.source_date),
+            "usd_npr": num_text(exchange_rate.rate, 4) if exchange_rate is not None else "",
+            "usd_npr_text": f"{exchange_rate.rate:,.2f}" if exchange_rate is not None else "",
+            "rate_type": exchange_rate.rate_type if exchange_rate is not None else "",
+            "source_label": exchange_rate.source_label if exchange_rate is not None else "",
+            "source_date_iso": iso_date(exchange_rate.source_date) if exchange_rate is not None else "",
         },
         "summary": {
             "total_deposits": num_text(result.summary.total_deposits),
@@ -186,10 +188,10 @@ def build_payload(
         "certificate": {
             "total_balance_npr": num_text(total_balance_npr),
             "total_balance_npr_text": format_amount(total_balance_npr),
-            "equivalent_usd": num_text(equivalent_usd),
-            "equivalent_usd_text": format_amount(equivalent_usd),
+            "equivalent_usd": num_text(equivalent_usd) if equivalent_usd is not None else "",
+            "equivalent_usd_text": format_amount(equivalent_usd) if equivalent_usd is not None else "",
             "balance_words_npr": amount_to_words_npr(total_balance_npr),
-            "balance_words_usd": amount_to_words_usd(equivalent_usd),
+            "balance_words_usd": amount_to_words_usd(equivalent_usd) if equivalent_usd is not None else "",
             "authorization_details": "Authorized Signature",
         },
         "statement_rows": rows,

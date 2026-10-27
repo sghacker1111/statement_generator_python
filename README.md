@@ -171,3 +171,5 @@ Checker-only users can import Excel or PDF statements, check and correct rows, m
 The SAMPLE Statement Preview includes Excel, Word, Print preview, Print, and saved-format export controls. Normal Word exports the statement table, while balance certificate exports remain in Export and Print. Save row changes with Update & Recalculate before exporting. The existing Office-compatible normal `.xls` / `.doc` exports need no desktop Office; embedded letterhead conversion keeps its existing Office dependency.
 
 Use Full-width view to hide the setup and navigation panels. Show setup panel or Escape restores the normal layout. The same controls work in Statement Generation and Statement Check, without replacing saved profiles.
+
+Transaction statement exports (normal Excel/Word, saved formats and print previews) work without a live NRB exchange-rate lookup. Balance certificates resolve the USD/NPR rate separately; when NRB is unavailable, enter a manual rate in the export prompt. No substitute rate or USD balance is invented for an offline statement export.

@@ -2803,6 +2803,12 @@ def build_export_input(payload: dict[str, object], user_id: int | None = None):
     else:
         result = generate_statement(config)
 
+    if str(payload.get("export_kind", "")).strip() == "statement":
+        # Excel, Word, saved-format and print exports of transaction statements
+        # must keep working offline. USD conversion belongs to certificates.
+        export_payload = build_payload(config, result, None, payload.get("source_type") == "imported")
+        return config, result, None, export_payload
+
     rate_mode_label = str(payload.get("rate_mode", form.get("rate_mode", default_form_values()["rate_mode"]))).strip()
     rate_mode = "manual" if rate_mode_label == "Manual" else "auto"
     manual_rate_text = str(payload.get("manual_rate", form.get("manual_rate", ""))).strip()

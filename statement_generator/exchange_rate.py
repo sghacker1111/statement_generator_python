@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 import json
+from http.client import HTTPException
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -43,8 +44,14 @@ def _request_payload(from_date: date, to_date: date, timeout: int = 20) -> dict:
             "User-Agent": NRB_USER_AGENT,
         },
     )
-    with urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except (OSError, HTTPException, ValueError) as error:
+        raise ExchangeRateLookupError(
+            "Nepal Rastra Bank exchange-rate service is unavailable. "
+            "Check your connection or enter a manual USD/NPR rate to continue exporting."
+        ) from error
 
 
 def _read_rate_value(item: dict, rate_type: str) -> float | None:
