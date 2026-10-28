@@ -38,6 +38,11 @@ test('ranges include merged cells that intersect the selected rectangle',()=>{
   const e=editor();const nodes=[{dataset:{row:'1',col:'1',formatKey:'merge'},rowSpan:2,colSpan:2},{dataset:{row:'2',col:'3',formatKey:'end'}}];
   assert.deepEqual(Array.from(e.ctx.rangeCellKeys(nodes,nodes[0],nodes[1])),['merge','end']);e.dom.window.close();
 });
+test('keyboard extension starts from a newly clicked cell rather than a stale endpoint',()=>{
+  const e=editor(),a=e.host.querySelector('[data-format-key=a]');e.state.officeSelectionEnd='d';
+  e.event(a,'pointerdown');e.event(a,'pointerup');e.host.dispatchEvent(new e.window.KeyboardEvent('keydown',{key:'ArrowRight',shiftKey:true,bubbles:true,cancelable:true}));
+  assert.deepEqual(Array.from(e.state.formatWorkspaceSelectedKeys),['a','b']);e.dom.window.close();
+});
 test('selected Excel words keep their range after toolbar focus and format only those words',()=>{
   const e=editor(),cell=e.host.querySelector('[data-format-key=a]'),text=cell.firstChild,r=e.document.createRange();
   r.setStart(text,6);r.setEnd(text,10);e.window.getSelection().addRange(r);e.selection.remember();

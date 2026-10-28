@@ -21,7 +21,7 @@ export function createOfficeSelection({host,state,selectItem,selectRange,toggleI
   tools.innerHTML='<label>Selection <select aria-label="Editor selection mode"><option value="auto">Automatic</option><option value="cells">Cells / blocks</option><option value="text">Words / text</option></select></label><label>Cell range <input aria-label="Select cell range" placeholder="A1:D8" size="12"></label><button type="button" data-select-range>Select range</button><button type="button" data-select-all>Select all</button><span class="muted">Drag to select cells; Shift-click extends, Ctrl/Cmd-click adds cells. Double-click or F2 edits cell text. Choose Words / text to select words.</span>';
   host.before(tools);host.tabIndex=0;
   const choice=tools.querySelector('select');choice.onchange=()=>{mode=choice.value;saved=null;state.formatInlineRange=null;host.dataset.selectionMode=cellMode()?'cells':'text';};
-  const setKeys=keys=>{if(!keys.length)return;state.formatWorkspaceSelectedKeys=keys;state.formatWorkspaceSelectedKey=keys[0];state.formatWorkspaceRangeRequest=null;state.formatWorkspaceMergeRequest=null;state.formatInlineRange=null;saved=null;selectItem(keys[0],cells().find(n=>n.dataset.formatKey===keys[0]),{keepRange:true});refreshSelection();};
+  const setKeys=keys=>{if(!keys.length)return;state.formatWorkspaceSelectedKeys=keys;state.formatWorkspaceSelectedKey=keys[0];state.formatWorkspaceAnchorKey=drag?.start.dataset.formatKey||keys[0];state.officeSelectionEnd=drag?.last.dataset.formatKey||keys.at(-1);state.formatWorkspaceRangeRequest=null;state.formatWorkspaceMergeRequest=null;state.formatInlineRange=null;saved=null;selectItem(keys[0],cells().find(n=>n.dataset.formatKey===keys[0]),{keepRange:true});refreshSelection();};
   const all=()=>setKeys(cells().map(n=>n.dataset.formatKey));
   tools.querySelector('[data-select-all]').onclick=()=>{if(cellMode())all();else{const nodes=cells();if(!nodes.length)return;const r=document.createRange();r.setStartBefore(nodes[0]);r.setEndAfter(nodes.at(-1));const s=window.getSelection();s.removeAllRanges();s.addRange(r);remember();}};
   tools.querySelector('[data-select-range]').onclick=()=>{const value=tools.querySelector('input').value.trim().toUpperCase().replaceAll('$','');const m=/^([A-Z]+\d+)(?::([A-Z]+\d+))?$/.exec(value);if(!m){status('Enter a cell range such as A1:D8.','error');return;}
@@ -34,7 +34,7 @@ export function createOfficeSelection({host,state,selectItem,selectRange,toggleI
   document.addEventListener('selectionchange',remember);
   host.addEventListener('pointerdown',event=>{
     const node=cellFor(event.target);if(!node||event.button!==0)return;
-    if(!event.shiftKey){saved=null;state.formatInlineRange=null;}
+    if(!event.shiftKey){saved=null;state.formatInlineRange=null;state.officeSelectionEnd=null;}
     if(!cellMode()||node.dataset.textEditing==='true') {if(state.formatWorkspaceSelectedKey!==node.dataset.formatKey)selectItem(node.dataset.formatKey,node);return;}
     event.preventDefault();host.focus({preventScroll:true});window.getSelection?.()?.removeAllRanges();
     if(event.ctrlKey||event.metaKey){toggleItem(node.dataset.formatKey,node);drag=null;return;}
