@@ -1092,7 +1092,7 @@ def _excel_cell_style(cell) -> dict[str, object]:
         "font_name": str(font.name or ""),
         "font_size": float(font.sz) if font.sz else "",
         "font_color": _openpyxl_color_text(font.color),
-        "fill_color": _openpyxl_color_text(fill.fgColor),
+        "fill_color": _openpyxl_color_text(fill.fgColor) if fill.patternType=='solid' else '',
         "border_style": border_style,
         "border": border_css,
         **border_sides,
@@ -1124,10 +1124,10 @@ def _excel_cell_runs(cell) -> list[dict[str, object]]:
             run["vert_align"] = "subscript"
         elif getattr(font, "vertAlign", None) == "superscript":
             run["vert_align"] = "superscript"
-        if getattr(font, "b", None):
-            run["bold"] = True
-        if getattr(font, "i", None):
-            run["italic"] = True
+        if getattr(font, "b", None) is not None:
+            run["bold"] = bool(font.b)
+        if getattr(font, "i", None) is not None:
+            run["italic"] = bool(font.i)
         if getattr(font, "u", None):
             run["underline"] = True
         if getattr(font, "strike", None):
@@ -1527,6 +1527,15 @@ def _word_paragraph_style(paragraph) -> dict[str, object]:
     font = first_run.font if first_run is not None else None
     size = getattr(font, "size", None)
     paragraph_format = paragraph.paragraph_format
+    formats=[paragraph_format];fonts=[font] if font is not None else []
+    current=paragraph.style;seen=set()
+    while current is not None and current.style_id not in seen:
+        seen.add(current.style_id);formats.append(current.paragraph_format);fonts.append(current.font);current=current.base_style
+    def inherited(name):
+        return next((getattr(value,name) for value in formats if getattr(value,name,None) is not None),None)
+    def inherited_font(name):
+        return next((getattr(value,name) for value in fonts if getattr(value,name,None) is not None),None)
+    size=inherited_font('size')
 
     def length_text(value) -> str:
         if value is None:
@@ -1536,9 +1545,9 @@ def _word_paragraph_style(paragraph) -> dict[str, object]:
         except Exception:
             return ""
 
-    line_spacing = paragraph_format.line_spacing
+    line_spacing = inherited('line_spacing')
     try:
-        line_spacing_text: object = round(float(line_spacing), 2) if isinstance(line_spacing, (int, float)) else ""
+        line_spacing_text: object = f'{line_spacing.pt:g}pt' if hasattr(line_spacing,'pt') else round(float(line_spacing),2) if line_spacing is not None else ''
     except Exception:
         line_spacing_text = ""
     left_tab = ""
@@ -1550,22 +1559,22 @@ def _word_paragraph_style(paragraph) -> dict[str, object]:
     except Exception:
         left_tab = ""
     return {
-        "alignment": _normal_alignment_text(paragraph.alignment),
-        "horizontal": _normal_alignment_text(paragraph.alignment),
+        "alignment": _normal_alignment_text(inherited('alignment')),
+        "horizontal": _normal_alignment_text(inherited('alignment')),
         "style": str(paragraph.style.name if paragraph.style is not None else ""),
-        "bold": bool(getattr(font, "bold", False)) if font is not None else False,
-        "italic": bool(getattr(font, "italic", False)) if font is not None else False,
-        "underline": bool(getattr(font, "underline", False)) if font is not None else False,
-        "strike": bool(getattr(font, "strike", False)) if font is not None else False,
-        "font_name": str(getattr(font, "name", "") or "") if font is not None else "",
+        "bold": bool(inherited_font('bold')),
+        "italic": bool(inherited_font('italic')),
+        "underline": bool(inherited_font('underline')),
+        "strike": bool(inherited_font('strike')),
+        "font_name": str(inherited_font('name') or ''),
         "font_size": round(size.pt, 2) if size is not None else "",
-        "left_indent": length_text(paragraph_format.left_indent),
-        "right_indent": length_text(paragraph_format.right_indent),
-        "first_line_indent": length_text(paragraph_format.first_line_indent),
+        "left_indent": length_text(inherited('left_indent')),
+        "right_indent": length_text(inherited('right_indent')),
+        "first_line_indent": length_text(inherited('first_line_indent')),
         "left_tab": left_tab,
         "line_spacing": line_spacing_text,
-        "space_before": length_text(paragraph_format.space_before),
-        "space_after": length_text(paragraph_format.space_after),
+        "space_before": length_text(inherited('space_before')),
+        "space_after": length_text(inherited('space_after')),
     }
 
 
@@ -2046,8 +2055,8 @@ def update_excel_template_item(path: Path, key: str, text: str, style_payload: d
             vert_align = str(segment.get("vert_align", "") or "").strip().lower()
             has_inline_style = bool(
                 vert_align
-                or segment.get("bold") is True
-                or segment.get("italic") is True
+                or "bold" in segment
+                or "italic" in segment
                 or segment.get("underline") is True
                 or segment.get("strike") is True
                 or str(segment.get("font_name", "") or "").strip()
@@ -2065,7 +2074,7 @@ def update_excel_template_item(path: Path, key: str, text: str, style_payload: d
                 sz=float(str(segment.get("font_size", "") or cell.font.sz or 11).replace("pt", "").replace("px", "")),
                 b=bool(segment.get("bold")) if "bold" in segment else bool(cell.font.bold),
                 i=bool(segment.get("italic")) if "italic" in segment else bool(cell.font.italic),
-                u="single" if bool(segment.get("underline")) else ("single" if cell.font.underline else None),
+                u=("single" if segment.get("underline") else None) if "underline" in segment else ("single" if cell.font.underline else None),
                 strike=bool(segment.get("strike")) if "strike" in segment else bool(cell.font.strike),
                 color=font_color or None,
                 vertAlign="subscript" if vert_align == "subscript" else "superscript" if vert_align == "superscript" else None,
@@ -2073,8 +2082,12 @@ def update_excel_template_item(path: Path, key: str, text: str, style_payload: d
             rich_text.append(TextBlock(inline_font, segment_text))
         return rich_text if wrote else None
 
-    rich_value = excel_rich_text_value(style_payload.get("rich_runs"))
-    cell.value = rich_value if rich_value is not None else (text if text != "" else None)
+    native_scalar=isinstance(cell.value,(int,float,date,datetime)) or cell.data_type=='f'
+    if not (native_scalar and text==str(cell.value)):
+        rich_value = excel_rich_text_value(style_payload.get("rich_runs"))
+        if native_scalar and isinstance(cell.value,(int,float)) and re.fullmatch(r'[-+]?\d+(?:\.\d+)?',text.replace(',','')):
+            cell.value=float(text.replace(',',''))
+        else:cell.value = rich_value if rich_value is not None else (text if text != "" else None)
     if style_payload:
         _apply_excel_style(cell, style_payload)
         merge_range = str(style_payload.get("merge_range", "") or "").strip()
@@ -2111,17 +2124,20 @@ def update_word_template_item(path: Path, key: str, text: str, style_payload: di
             raise ValueError("Selected paragraph was not found in this format.")
         target_paragraph = document.paragraphs[index]
     elif key.startswith("t:"):
-        match = re.fullmatch(r"t:(\d+):r:(\d+):c:(\d+)", key)
+        match = re.fullmatch(r"t:(\d+):r:(\d+):c:(\d+)(?::p:(\d+))?", key)
         if not match:
             raise ValueError("Selected table cell was not found in this format.")
-        table_index, row_index, cell_index = [int(part) for part in match.groups()]
+        table_index, row_index, cell_index = [int(part) for part in match.groups()[:3]]
         try:
             cell = document.tables[table_index].rows[row_index].cells[cell_index]
         except IndexError as error:
             raise ValueError("Selected table cell was not found in this format.") from error
         target_cell = cell
         target_paragraph = cell.paragraphs[0] if cell.paragraphs else cell.add_paragraph()
-        if text != cell.text and not style_payload.get("paragraphs"):
+        if match.group(4) is not None:
+            target_paragraph=cell.paragraphs[int(match.group(4))]
+            target_cell=None
+        if target_cell is not None and text != cell.text and not style_payload.get("paragraphs"):
             for extra in list(cell.paragraphs[1:]):
                 extra._element.getparent().remove(extra._element)
     else:
@@ -2202,6 +2218,17 @@ def update_word_template_item(path: Path, key: str, text: str, style_payload: di
         for extra in list(target_cell.paragraphs[len(paragraphs):]):
             extra._element.getparent().remove(extra._element)
         document.save(str(path))
+        css_keys={'font-family':'font_name','font-size':'font_size','font-weight':'bold','font-style':'italic','text-decoration':'underline','color':'font_color','text-align':'horizontal','margin-left':'left_indent','margin-right':'right_indent','text-indent':'first_line_indent','margin-top':'space_before','margin-bottom':'space_after','line-height':'line_spacing'}
+        for index,data in enumerate(paragraphs):
+            merged={k:v for k,v in style_payload.items() if k not in {'paragraphs','rich_runs'}}
+            for prop,value in data.get('style',{}).items():
+                if prop in css_keys:
+                    if prop=='font-weight':value=str(value) in {'bold','700'}
+                    elif prop=='font-style':value=value=='italic'
+                    elif prop=='text-decoration':value='underline' in value
+                    merged[css_keys[prop]]=value
+            if data.get('rich_runs'):merged['rich_runs']=data['rich_runs']
+            update_word_template_item(path,key+':p:'+str(index),str(data.get('text','')),merged)
         return
     rich_text_applied = set_paragraph_rich_text(target_paragraph, style_payload.get("rich_runs") if isinstance(style_payload, dict) else None, text)
     if not rich_text_applied:
@@ -2222,7 +2249,9 @@ def update_word_template_item(path: Path, key: str, text: str, style_payload: di
         line_spacing = str(style_payload.get("line_spacing", "") or "").strip()
         if line_spacing:
             try:
-                target_paragraph.paragraph_format.line_spacing = float(line_spacing)
+                from docx.shared import Pt
+                match=re.fullmatch(r'\s*([\d.]+)\s*(pt|px)?\s*',line_spacing)
+                if match:target_paragraph.paragraph_format.line_spacing=Pt(float(match[1])*(.75 if match[2]=='px' else 1)) if match[2] else float(match[1])
             except Exception:
                 pass
         for name in ['space_before','space_after']:

@@ -51,3 +51,12 @@ A4 pagination uses [Paged.js](https://github.com/pagedjs/pagedjs), version 0.4.3
 Normal Excel downloads are native `.xlsx`, and Word statement/certificate downloads are native `.docx`. Saved formats remain native Office documents; HTML is used only for an explicit print preview. Page margins, paragraph spacing, font and alignment tools and native-format download are available in the editor. The browser editor supports common Office features and is not a full Microsoft 365 instance. Legacy binary `.doc` conversion still needs a local conversion engine.
 
 **Security & Login** lets every user change their password with the current password. Five consecutive failed sign-in attempts persistently lock an account across devices. Admins can unlock login or reset a user password, and can generate ten hashed, single-use recovery codes. The login page provides admin recovery. Existing accounts and password hashes survive startup; a new installation generates a private initial login file next to its database. Never commit that file.
+
+
+## Selecting and formatting imported documents
+
+The editor supports drag selection, Shift-click to extend, Ctrl/Cmd-click to add cells, an A1:D8 range field, and Select all. Automatic selection chooses cells for Excel and text for Word. Choose Words / text, double-click an Excel cell, or press F2 to edit or select words inside a cell. Font and emphasis controls apply to the selected words; with no text selection they apply to the selected cells or blocks. Save All Format Changes retains edits in the native file.
+
+Imports resolve paragraph and character style inheritance and common document defaults, preserve mixed fonts, alignment, paragraph spacing and hanging indents, and show original row/column dimensions. Native settings that the browser cannot display remain in the source package where supported. This is a browser editor, so floating objects, complex section pagination, some table styles, macros, and every advanced Office layout are not guaranteed to render exactly like Microsoft Office. Keep an original copy for those files.
+
+Developer UI checks: install test dependencies with `npm ci` and run `npm test` (Node 24 or newer).

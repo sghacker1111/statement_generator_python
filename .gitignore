@@ -22,6 +22,7 @@ _web_temp/
 statement_generator/*_statement_profile.json
 
 # Bundled/local dependencies
+/node_modules/
 .deps/
 .vendor/
 venv/

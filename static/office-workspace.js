@@ -1,5 +1,5 @@
 /* Shared PHP/Python editor and A4 sample-document controls. */
-export function createOfficeWorkspace({apiUrl,fetchJson,state,formatSheetHost,getFormValues,richRunsForKey,showFormatSaveStatus,refreshTemplates,loadTemplateDetail,appendLog,escapeHtml}) {
+export function createOfficeWorkspace({apiUrl,fetchJson,state,formatSheetHost,getFormValues,richRunsForKey,runsForNode,showFormatSaveStatus,refreshTemplates,loadTemplateDetail,appendLog,escapeHtml}) {
   const scriptRoot = new URL('.', import.meta.url);
   let letterheadRequest = 0;
   let pageBaseline = '';
@@ -132,7 +132,8 @@ table{max-width:100%}tr{break-inside:avoid}thead{display:table-header-group}
       if (state.officeBaseline?.get(key) === signature(node)) continue;
       const style = {};
       const css = node.style;
-      for (const [key,prop] of Object.entries({font_name:'fontFamily',font_size:'fontSize',font_color:'color',fill_color:'backgroundColor',horizontal:'textAlign',vertical:'verticalAlign',left_indent:'paddingLeft',first_line_indent:'textIndent',space_before:'marginTop',space_after:'marginBottom',line_spacing:'lineHeight'})) if (css[prop]) style[key] = css[prop];
+      for (const [key,prop] of Object.entries({font_name:'fontFamily',font_size:'fontSize',font_color:'color',fill_color:'backgroundColor',horizontal:'textAlign',vertical:'verticalAlign',left_indent:'paddingLeft',right_indent:'marginRight',first_line_indent:'textIndent',space_before:'marginTop',space_after:'marginBottom',line_spacing:'lineHeight'})) if (css[prop]) style[key] = css[prop];
+      if(css.marginLeft)style.left_indent=css.marginLeft;
       for (const key of ['font_color','fill_color']) {
         const rgb = /^rgba?\(\s*(\d+)[, ]+\s*(\d+)[, ]+\s*(\d+)/i.exec(style[key] || '');
         if (rgb) style[key] = '#' + rgb.slice(1).map(value => Number(value).toString(16).padStart(2,'0')).join('');
@@ -149,7 +150,7 @@ table{max-width:100%}tr{break-inside:avoid}thead{display:table-header-group}
       const runs = richRunsForKey(key);
       if (runs.length) style.rich_runs = runs;
       const paragraphs = Array.from(node.children).filter(child => child.tagName === "P");
-      if (paragraphs.length) style.paragraphs = paragraphs.map(p => ({text:text(p)}));
+      if (paragraphs.length) style.paragraphs = paragraphs.map(p => ({text:text(p),rich_runs:runsForNode(p),style:Object.fromEntries(['font-family','font-size','color','font-weight','font-style','text-decoration','text-align','margin-left','margin-right','text-indent','margin-top','margin-bottom','line-height'].map(key=>[key,p.style.getPropertyValue(key)]).filter(([,value])=>value))}));
       edits.push({key, text:text(node), style});
     }
     if (!edits.length) { showFormatSaveStatus('No unsaved changes.','success'); return; }
@@ -180,7 +181,7 @@ table{max-width:100%}tr{break-inside:avoid}thead{display:table-header-group}
       const paragraph=document.createElement('div');paragraph.className='ribbon-group';paragraph.innerHTML='<span class="ribbon-label">Paragraph spacing</span><label>Before <input id="office-space-before" type="number" min="0" max="200" value="0" aria-label="Paragraph spacing before (pt)"></label><label>After <input id="office-space-after" type="number" min="0" max="200" value="0" aria-label="Paragraph spacing after (pt)"></label>';
       group.before(paragraph);
       for(const [id,property]of [['office-space-before','marginTop'],['office-space-after','marginBottom']])document.getElementById(id).onchange=event=>{
-        const nodes=formatSheetHost.querySelectorAll('[data-format-key].is-selected,[data-format-key][data-format-selected="true"]');
+        const nodes=formatSheetHost.querySelectorAll('[data-format-key].is-selected,[data-format-key].is-range-selected,[data-format-key][data-format-selected="true"]');
         const selected=nodes.length?nodes:[...formatSheetHost.querySelectorAll('[data-format-key]')].filter(node=>node.dataset.formatKey===state.formatWorkspaceSelectedKey);
         for(const node of selected)node.style[property]=`${Math.max(0,Number(event.target.value)||0)}pt`;
       };

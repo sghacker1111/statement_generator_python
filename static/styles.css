@@ -1924,3 +1924,13 @@ body.auth-locked #login-overlay {
 .letterhead-panel { margin:12px 0; padding:12px; border:1px solid #b9c8ce; border-radius:8px; display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
 .letterhead-panel legend {font-weight:700}
 #letterhead-thumbnail[hidden] {display:none!important}
+
+.office-selection-tools {display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:10px 0;padding:10px;border:1px solid #c9d8df;border-radius:8px;background:#f8fbfc}
+.office-selection-tools label {display:flex;align-items:center;gap:6px}
+.office-selection-tools input {width:110px}
+#format-sheet-host[data-selection-mode="cells"] .visual-cell {cursor:cell;user-select:none}
+#format-sheet-host[data-selection-mode="cells"] .visual-cell[data-text-editing="true"],#format-sheet-host[data-selection-mode="text"] [data-format-key] {cursor:text;user-select:text}
+#format-sheet-host .word-block.is-range-selected {outline:2px dashed #176f62;outline-offset:-2px}
+#format-sheet-host ::selection {background:#b9d8f7;color:inherit}
+.word-block-label {user-select:none}
+.html-template-preview.word-page td,.html-template-preview.word-page th {min-width:0}

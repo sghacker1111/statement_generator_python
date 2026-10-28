@@ -3,7 +3,8 @@ import { canGenerateStatements } from "./preview-workspace.js?v=20261007-preview
 let workspaceUI = null;
 let authBusy = false;
 let sessionEpoch = 0;
-import { createOfficeWorkspace } from "./office-workspace.js?v=20261028-native2";
+import { createOfficeWorkspace } from "./office-workspace.js?v=20261028-selection";
+import { createOfficeSelection, rangeCellKeys } from "./office-selection.js?v=20261028-selection";
 const rootUrl = new URL("./", window.location.href);
 const apiUrl = (action, params = null) => {
   const url = new URL(`api/${action}`, rootUrl);
@@ -2035,6 +2036,8 @@ function itemGridPosition(item, index, context) {
 
 function formatColorToCss(value) {
   const text = String(value || "").trim();
+  const rgb=/^rgba?\(\s*(\d+)[, ]+\s*(\d+)[, ]+\s*(\d+)/i.exec(text);
+  if(rgb)return '#'+rgb.slice(1).map(v=>Math.min(255,Number(v)).toString(16).padStart(2,'0')).join('');
   if (/^#[0-9a-f]{6}$/i.test(text)) {
     return text;
   }
@@ -2161,7 +2164,7 @@ function applyFormatItemStyle(node, item) {
   if (fontColor) {
     node.style.color = fontColor;
   }
-  if (fillColor && fillColor.toLowerCase() !== "#000000") {
+  if (fillColor) {
     node.style.backgroundColor = fillColor;
   }
   if (style["font-weight"] || style.bold) {
@@ -2229,8 +2232,15 @@ function selectedPrimaryFormatNode() {
 }
 
 function applyCssToSelectedNodes(style) {
+  if(state.templateEditorDetail?.kind==='certificate' && 'paddingLeft' in style)style={...style,marginLeft:style.paddingLeft,paddingLeft:''};
+  const inlineProperties = ['fontFamily','fontSize','fontWeight','fontStyle','color','backgroundColor','textDecoration','verticalAlign'];
+  if (Object.keys(style).every(key=>inlineProperties.includes(key)) && OfficeSelection.applyTextStyle(style)) return;
   for (const node of selectedFormatNodes()) {
     Object.assign(node.style, style);
+    const paragraphStyle=Object.fromEntries(Object.entries(style).filter(([key])=>['textAlign','lineHeight','marginLeft','marginRight','marginTop','marginBottom','textIndent'].includes(key)));
+    if(state.templateEditorDetail?.kind==='certificate' && Object.keys(paragraphStyle).length)node.querySelectorAll('p').forEach(child=>Object.assign(child.style,paragraphStyle));
+    const textStyle=Object.fromEntries(Object.entries(style).filter(([key])=>inlineProperties.includes(key)));
+    if(Object.keys(textStyle).length)node.querySelectorAll('span,b,strong,i,em,u,s').forEach(child=>Object.assign(child.style,textStyle));
   }
 }
 
@@ -2246,9 +2256,12 @@ function inlineRunStyle(run) {
     styles.push("vertical-align:super", "font-size:80%");
   }
   if (run.bold === true) styles.push("font-weight:700");
+  if (run.bold === false) styles.push("font-weight:400");
   if (run.italic === true) styles.push("font-style:italic");
+  if (run.italic === false) styles.push("font-style:normal");
   if (run.underline === true) styles.push("text-decoration:underline");
   if (run.strike === true) styles.push("text-decoration:line-through");
+  if(run.underline===false&&run.strike!==true || run.strike===false&&run.underline!==true)styles.push("text-decoration:none");
   if (run.font_name) styles.push(`font-family:${String(run.font_name).replaceAll('"', "")}`);
   if (run.font_size) styles.push(`font-size:${/^\d+(\.\d+)?$/.test(String(run.font_size)) ? `${run.font_size}pt` : run.font_size}`);
   const color = formatColorToCss(run.font_color || run.color || "");
@@ -2275,10 +2288,7 @@ function collectInlineRunsFromNode(root) {
     }
     const run = { text };
     if (style.vert_align) run.vert_align = style.vert_align;
-    if (style.bold) run.bold = true;
-    if (style.italic) run.italic = true;
-    if (style.underline) run.underline = true;
-    if (style.strike) run.strike = true;
+    for (const key of ['bold','italic','underline','strike']) if (key in style) run[key] = style[key];
     if (style.font_name) run.font_name = style.font_name;
     if (style.font_size) run.font_size = style.font_size;
     if (style.font_color) run.font_color = style.font_color;
@@ -2303,6 +2313,7 @@ function collectInlineRunsFromNode(root) {
     }
     const element = node;
     const tag = element.tagName?.toLowerCase?.() || "";
+    if (tag === "br") { pushRun("\n", inherited); return; }
     const style = element.style || {};
     const next = { ...inherited };
     const vertical = normalizeVerticalAlign(style.verticalAlign || (tag === "sub" ? "sub" : tag === "sup" ? "super" : ""));
@@ -2313,13 +2324,16 @@ function collectInlineRunsFromNode(root) {
     }
     const fontWeight = String(style.fontWeight || "").toLowerCase();
     if (tag === "b" || tag === "strong" || fontWeight === "bold" || fontWeight === "700") next.bold = true;
+    else if (fontWeight === "normal" || fontWeight === "400") next.bold = false;
     if (tag === "i" || tag === "em" || style.fontStyle === "italic") next.italic = true;
+    else if (style.fontStyle === "normal") next.italic = false;
     const decoration = String(style.textDecoration || "").toLowerCase();
     if (tag === "u" || decoration.includes("underline")) next.underline = true;
     if (tag === "s" || tag === "strike" || decoration.includes("line-through")) next.strike = true;
+    if (decoration === "none") { next.underline = false; next.strike = false; }
     if (style.fontFamily) next.font_name = style.fontFamily.replaceAll('"', "");
     if (style.fontSize && !["80%", "smaller"].includes(style.fontSize)) next.font_size = style.fontSize;
-    if (style.color) next.font_color = style.color;
+    if (style.color) next.font_color = formatColorToCss(style.color) || style.color;
     node.childNodes.forEach((child) => walk(child, next));
   };
   walk(root);
@@ -2332,7 +2346,7 @@ function richRunsForKey(key = state.formatWorkspaceSelectedKey) {
     return [];
   }
   const runs = collectInlineRunsFromNode(node);
-  return runs.some((run) => run.vert_align || run.bold || run.italic || run.underline || run.strike || run.font_name || run.font_size || run.font_color)
+  return runs.some((run) => run.vert_align || ['bold','italic','underline','strike'].some(key=>key in run) || run.font_name || run.font_size || run.font_color)
     ? runs
     : [];
 }
@@ -2379,6 +2393,7 @@ function syncInlineWorkspaceText(node) {
 }
 
 function applyInlineVerticalScript(command) {
+  if (OfficeSelection.applyTextStyle({verticalAlign:command==='subscript'?'sub':'super',fontSize:'80%'})) return;
   const host = editableContentNode();
   const range = selectionInsideNode(host);
   if (!range) {
@@ -2559,7 +2574,7 @@ function updateToolbarFromItem(item) {
     formatLeftTab.value = String(Math.max(0, Math.min(144, Math.round(cssLengthToPx(rawTab, 18) || 0))));
   }
   if (formatLeftIndent) {
-    const rawIndent = style["padding-left"] || style.left_indent || style.indent || "";
+    const rawIndent = style["margin-left"] || style["padding-left"] || style.left_indent || style.indent || "";
     const indentPx = cssLengthToPx(rawIndent, 18);
     formatLeftIndent.value = String(Math.max(0, Math.min(144, Math.round(indentPx || 0))));
   }
@@ -2784,13 +2799,7 @@ function selectFormatRange(fromKey, toKey) {
   const bottom = Math.max(from.row, to.row);
   const left = Math.min(from.col, to.col);
   const right = Math.max(from.col, to.col);
-  const keys = [];
-  formatSheetHost?.querySelectorAll("[data-format-key]").forEach((node) => {
-    const pos = nodeGridPosition(node);
-    if (pos && pos.row >= top && pos.row <= bottom && pos.col >= left && pos.col <= right) {
-      keys.push(node.dataset.formatKey);
-    }
-  });
+  const keys = rangeCellKeys([...formatSheetHost.querySelectorAll("[data-format-key]")],fromNode,toNode);
   state.formatWorkspaceSelectedKeys = keys;
   const primaryNode = Array.from(formatSheetHost?.querySelectorAll("[data-format-key]") || [])
     .find((node) => {
@@ -2830,6 +2839,7 @@ function toggleFormatWorkspaceSelection(key, node = null) {
     selected.add(key);
   }
   state.formatWorkspaceSelectedKeys = Array.from(selected);
+  if(!selected.has(key)){key=state.formatWorkspaceSelectedKeys.at(-1);node=findFormatWorkspaceNode(key);}
   state.formatWorkspaceSelectedKey = key;
   state.formatWorkspaceAnchorKey ||= key;
   state.formatWorkspaceMergeRequest = null;
@@ -2959,11 +2969,18 @@ function renderHtmlPreviewFormat(detail) {
   shell.innerHTML = String(detail?.html_preview || "");
   OfficeWorkspace.scopePreviewStyles(shell);
   shell.querySelectorAll("table").forEach((table) => {
+    const covered=new Set();
     Array.from(table.rows).forEach((rowNode, rowIndex) => {
-      Array.from(rowNode.cells).forEach((cellNode, colIndex) => {
-        cellNode.dataset.row = String(rowIndex + 1);
-        cellNode.dataset.col = String(colIndex + 1);
-        cellNode.dataset.address = cellNode.dataset.address || `${columnName(colIndex + 1)}${rowIndex + 1}`;
+      let gridColumn=1;
+      Array.from(rowNode.cells).forEach((cellNode) => {
+        while(covered.has(`${rowIndex+1}:${gridColumn}`))gridColumn++;
+        cellNode.dataset.row ||= String(rowIndex + 1);
+        cellNode.dataset.col ||= String(gridColumn);
+        const address = addressToRowCol(cellNode.dataset.address);
+        if (address) { cellNode.dataset.row=String(address.row); cellNode.dataset.col=String(address.col); }
+        cellNode.dataset.address = cellNode.dataset.address || `${columnName(gridColumn)}${rowIndex + 1}`;
+        for(let r=rowIndex+1;r<rowIndex+1+(cellNode.rowSpan||1);r++)for(let c=gridColumn;c<gridColumn+(cellNode.colSpan||1);c++)covered.add(`${r}:${c}`);
+        gridColumn+=cellNode.colSpan||1;
       });
     });
   });
@@ -2999,13 +3016,14 @@ function renderFormatSheet(detail) {
   const model = buildFormatSheetModel(detail);
   const table = document.createElement("table");
   table.className = "visual-sheet";
+  table.style.minWidth="0";
   const colgroup = document.createElement("colgroup");
   colgroup.append(document.createElement("col"));
   for (let col = 1; col <= model.maxCol; col++) {
     const colNode = document.createElement("col");
     const width = Number(model.columnWidths[columnName(col)] || model.columnWidths[col] || 0);
     if (width > 0) {
-      colNode.style.width = `${Math.max(46, Math.round(width * 7 + 12))}px`;
+      colNode.style.width = `${Math.max(0, Math.round(width * 7 + 5))}px`;
     }
     colgroup.append(colNode);
   }
@@ -3025,10 +3043,11 @@ function renderFormatSheet(detail) {
     const tr = document.createElement("tr");
     const rowHeight = Number(model.rowHeights[row] || 0);
     if (rowHeight > 0) {
-      tr.style.height = `${Math.max(20, Math.round(rowHeight * 4 / 3))}px`;
+      tr.style.height = `${rowHeight * 4 / 3}px`;
     }
     const rowHead = document.createElement("th");
     rowHead.className = "row-head";
+    rowHead.style.height="auto";
     rowHead.textContent = String(row);
     tr.append(rowHead);
     for (let col = 1; col <= model.maxCol; col++) {
@@ -3037,6 +3056,7 @@ function renderFormatSheet(detail) {
       }
       const td = document.createElement("td");
       td.className = "visual-cell";
+      td.style.height="auto";td.style.minWidth="0";td.style.padding="0 2px";
       td.dataset.row = String(row);
       td.dataset.col = String(col);
       const entry = model.cellMap.get(`${row}:${col}`);
@@ -3163,6 +3183,7 @@ function renderVisualFormatWorkspace(detail, selectedKey = "") {
   }
   applyFormatWorkspaceView();
   OfficeWorkspace.rememberWorkspace();
+  OfficeSelection.reset();
 }
 
 async function saveSelectedWorkspaceItem() {
@@ -3666,7 +3687,8 @@ async function requestExportBlobForPrint(payload) {
   return response.blob();
 }
 
-const OfficeWorkspace = createOfficeWorkspace({apiUrl,fetchJson,state,formatSheetHost,getFormValues,richRunsForKey,showFormatSaveStatus,refreshTemplates,loadTemplateDetail,appendLog,escapeHtml});
+const OfficeWorkspace = createOfficeWorkspace({apiUrl,fetchJson,state,formatSheetHost,getFormValues,richRunsForKey,runsForNode:collectInlineRunsFromNode,showFormatSaveStatus,refreshTemplates,loadTemplateDetail,appendLog,escapeHtml});
+const OfficeSelection = createOfficeSelection({host:formatSheetHost,state,selectItem:selectFormatWorkspaceItem,selectRange:selectFormatRange,toggleItem:toggleFormatWorkspaceSelection,refreshSelection:refreshFormatSelectionClasses,pushUndo:pushFormatUndoSnapshot,status:showFormatSaveStatus});
 function buildPrintHtml(sourceHtml, kind, autoPrint, letterhead = {}) {
   return OfficeWorkspace.buildPrintHtml(sourceHtml, kind, autoPrint, letterhead);
 }

@@ -89,6 +89,62 @@ class OfficeFormatTests(unittest.TestCase):
         app.update_word_template_item(path, 't:0:r:0:c:0', 'Changed\nSecond', {})
         self.assertEqual(Document(path).tables[0].cell(0,0).text, 'Changed\nSecond')
 
+    def test_inherited_font_hanging_indent_and_exact_spacing_load_and_save(self):
+        from docx import Document
+        from docx.enum.style import WD_STYLE_TYPE
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.shared import Pt
+        document=Document()
+        style=document.styles.add_style('Imported',WD_STYLE_TYPE.PARAGRAPH)
+        style.base_style=document.styles['Normal'];style.font.name='Courier New';style.font.size=Pt(14)
+        style.paragraph_format.left_indent=Pt(36);style.paragraph_format.first_line_indent=Pt(-18)
+        style.paragraph_format.line_spacing=Pt(17);style.paragraph_format.alignment=WD_ALIGN_PARAGRAPH.RIGHT
+        p=document.add_paragraph('Keep mixed ',style);p.add_run('text').bold=True
+        path=self.root/'inherited.docx';document.save(path)
+        html=word_html(path,editable_keys=True)
+        for css in ['margin-left:36pt','text-indent:-18pt','line-height:17pt','text-align:right','font-family:Courier New']:
+            self.assertIn(css,html)
+        scan=app.scan_template_file('certificate',path)
+        self.assertEqual(scan['items'][0]['style']['line_spacing'],'17pt')
+        app.update_word_template_item(path,'p:0','Keep mixed text',{'first_line_indent':'-16px','left_indent':'48px','line_spacing':'19pt','rich_runs':[{'text':'Keep mixed ','font_name':'Courier New','bold':False},{'text':'text','bold':True}]})
+        result=Document(path).paragraphs[0]
+        self.assertAlmostEqual(result.paragraph_format.first_line_indent.pt,-12)
+        self.assertAlmostEqual(result.paragraph_format.left_indent.pt,36)
+        self.assertAlmostEqual(result.paragraph_format.line_spacing.pt,19)
+        self.assertFalse(result.runs[0].bold);self.assertTrue(result.runs[1].bold)
+
+    def test_word_table_paragraph_rich_text_and_indentation_save_together(self):
+        from docx import Document
+        from docx.shared import Pt
+        document=Document();cell=document.add_table(rows=1,cols=1).cell(0,0)
+        cell.text='First words';cell.add_paragraph('Second words')
+        path=self.root/'table-rich.docx';document.save(path)
+        app.update_word_template_item(path,'t:0:r:0:c:0','First words\nSecond words',{'paragraphs':[
+            {'text':'First words','style':{'margin-left':'24pt','text-indent':'-12pt'},'rich_runs':[{'text':'First ','bold':True},{'text':'words','bold':False}]},
+            {'text':'Second words','style':{'text-align':'right','line-height':'18pt'}}]})
+        result=Document(path).tables[0].cell(0,0)
+        self.assertEqual(len(result.paragraphs),2)
+        self.assertTrue(result.paragraphs[0].runs[0].bold);self.assertFalse(result.paragraphs[0].runs[1].bold)
+        self.assertAlmostEqual(result.paragraphs[0].paragraph_format.left_indent.pt,24)
+        self.assertAlmostEqual(result.paragraphs[0].paragraph_format.first_line_indent.pt,-12)
+        self.assertAlmostEqual(result.paragraphs[1].paragraph_format.line_spacing.pt,18)
+
+    def test_excel_partial_text_styles_preserve_false_and_numeric_formats_keep_numbers(self):
+        from openpyxl import Workbook,load_workbook
+        from openpyxl.styles import Font
+        workbook=Workbook();sheet=workbook.active;sheet['A1']='Bold normal';sheet['A1'].font=Font(bold=True)
+        sheet['B1']=160.25;sheet['C1']='=B1+1';path=self.root/'rich.xlsx';workbook.save(path)
+        app.update_excel_template_item(path,'Sheet!A1','Bold normal',{'rich_runs':[{'text':'Bold ','bold':True},{'text':'normal','bold':False}]})
+        app.update_excel_template_item(path,'Sheet!B1','160.25',{'number_format':'0.00%','rich_runs':[{'text':'160.25','font_name':'Calibri'}]})
+        app.update_excel_template_item(path,'Sheet!C1','=B1+1',{'bold':True})
+        result=load_workbook(path,rich_text=True)
+        self.assertTrue(result.active['A1'].value[0].font.b);self.assertFalse(result.active['A1'].value[1].font.b)
+        self.assertEqual(result.active['B1'].value,160.25);self.assertEqual(result.active['B1'].number_format,'0.00%');self.assertEqual(result.active['C1'].value,'=B1+1')
+        scan=app.scan_template_file('statement',path)
+        first=next(item for item in scan['items'] if item['address']=='A1')
+        self.assertFalse(first['runs'][1]['bold'])
+        result.close()
+
     def test_letterheads_are_scoped_and_invalid_margins_rejected(self):
         image='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='
         value = save_letterhead(self.root, 1, 'statement', 'Model 1', {'image':image})

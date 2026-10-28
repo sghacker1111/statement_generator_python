@@ -12,6 +12,32 @@ def word_html(path: Path, title='Balance Certificate', editable_keys=False) -> s
     from docx.oxml.ns import qn
 
     document = Document(path)
+    defaults=document.styles.element.xpath('./w:docDefaults/w:rPrDefault/w:rPr')
+    default_props=defaults[0] if defaults else None
+    theme_fonts={}
+    from lxml import etree
+    for rel in document.part.rels.values():
+        if rel.reltype.endswith('/theme') and not rel.is_external:
+            theme=etree.fromstring(rel.target_part.blob)
+            for group in ['major','minor']:
+                node=theme.xpath('//*[local-name()="'+group+'Font"]/*[local-name()="latin"]')
+                if node:theme_fonts[group]=node[0].get('typeface','')
+    def default_font(name):
+        if default_props is None:return None
+        props={'name':'rFonts','size':'sz','bold':'b','italic':'i','underline':'u'}
+        node=default_props.find(qn('w:'+props.get(name,''))) if name in props else None
+        if node is None:return None
+        raw=node.get(qn('w:val'))
+        if name=='name':
+            raw=node.get(qn('w:ascii'))
+            if not raw:
+                group='major' if node.get(qn('w:asciiTheme'),'').startswith('major') else 'minor'
+                raw=theme_fonts.get(group)
+            return raw
+        if name=='size':
+            from docx.shared import Pt
+            return Pt(float(raw)/2) if raw else None
+        return raw not in {'0','false','none'}
 
     def inherited(obj, name, fallback=None):
         value = getattr(obj, name, None)
@@ -56,19 +82,29 @@ def word_html(path: Path, title='Balance Certificate', editable_keys=False) -> s
         for element in paragraph._p.xpath('./*[local-name()="r"] | ./*[local-name()="hyperlink"]/*[local-name()="r"]'):
             run = Run(element, paragraph)
             font_chain=[run.font]
-            if run.style is not None: font_chain.append(run.style.font)
+            character_style=run.style
+            seen=set()
+            while character_style is not None and character_style.style_id not in seen:
+                seen.add(character_style.style_id);font_chain.append(character_style.font);character_style=character_style.base_style
             style=paragraph.style
             visited=set()
             while style is not None and style.style_id not in visited:
                 visited.add(style.style_id);font_chain.append(style.font);style=style.base_style
             def font_value(name):
-                return next((getattr(f,name) for f in font_chain if getattr(f,name,None) is not None), None)
+                if name=='name':
+                    for f in font_chain:
+                        if f.name:return f.name
+                        refs=f._element.xpath('./w:rPr/w:rFonts')
+                        if refs:
+                            ref=refs[0].get(qn('w:asciiTheme'),'')
+                            if ref:return theme_fonts.get('major' if ref.startswith('major') else 'minor')
+                return next((getattr(f,name) for f in font_chain if getattr(f,name,None) is not None), default_font(name))
             fmt={}
             if font_value('name'): fmt['font-family']=str(font_value('name')).replace(';','')
             if font_value('size'): fmt['font-size']=f'{font_value("size").pt:g}pt'
-            if font_value('bold'): fmt['font-weight']='bold'
-            if font_value('italic'): fmt['font-style']='italic'
-            if font_value('underline'): fmt['text-decoration']='underline'
+            if font_value('bold') is not None: fmt['font-weight']='bold' if font_value('bold') else 'normal'
+            if font_value('italic') is not None: fmt['font-style']='italic' if font_value('italic') else 'normal'
+            if font_value('underline') is not None: fmt['text-decoration']='underline' if font_value('underline') else 'none'
             if font_value('strike'): fmt['text-decoration']=fmt.get('text-decoration','')+' line-through'
             if font_value('hidden'): fmt['display']='none'
             if run.font.color.rgb: fmt['color']='#'+str(run.font.color.rgb)
