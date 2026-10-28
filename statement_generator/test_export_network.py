@@ -2,6 +2,7 @@ from datetime import date
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 import json
+import io
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Thread
@@ -71,9 +72,16 @@ class ExportNetworkTests(TestCase):
                         for file_type in ('excel','word'):
                             status,header,body=post({**payload,'statement_file_type':file_type})
                             self.assertEqual(status,200,body)
-                            self.assertIn('.doc' if file_type=='word' else '.xls',header)
-                            self.assertIn(b'379,742',body)
-                            self.assertIn(b'Transfer in',body)
+                            self.assertIn('.docx' if file_type=='word' else '.xlsx',header)
+                            self.assertTrue(body.startswith(b'PK'))
+                            if file_type=='word':
+                                from docx import Document
+                                document=Document(io.BytesIO(body));text='\n'.join(cell.text for table in document.tables for row in table.rows for cell in row.cells)
+                                self.assertIn('379,742',text);self.assertIn('Transfer in',text)
+                            else:
+                                from openpyxl import load_workbook
+                                workbook=load_workbook(io.BytesIO(body));values=[cell.value for row in workbook.active for cell in row]
+                                self.assertIn(379742,values);self.assertIn('Transfer in',values);workbook.close()
                         network.assert_not_called()
                         # Selected-format export and print preview must also avoid NRB.
                         source=root/'template.xlsx';source.write_bytes(b'local-template')
@@ -98,6 +106,8 @@ class ExportNetworkTests(TestCase):
                         for extra in ({'rate_mode':'Manual','manual_rate':'140'}, {'manual_rate':'140'}):
                             status,_,body=post({**payload,'export_kind':'certificate',**extra})
                             self.assertEqual(status,200,body)
-                            self.assertIn(b'2,712.44',body)
+                            from docx import Document
+                            text='\n'.join(p.text for p in Document(io.BytesIO(body)).paragraphs)
+                            self.assertIn('2,712.44',text)
                 finally:
                     server.shutdown();server.server_close();thread.join(timeout=5)

@@ -173,3 +173,9 @@ The SAMPLE Statement Preview includes Excel, Word, Print preview, Print, and sav
 Use Full-width view to hide the setup and navigation panels. Show setup panel or Escape restores the normal layout. The same controls work in Statement Generation and Statement Check, without replacing saved profiles.
 
 Transaction statement exports (normal Excel/Word, saved formats and print previews) work without a live NRB exchange-rate lookup. Balance certificates resolve the USD/NPR rate separately; when NRB is unavailable, enter a manual rate in the export prompt. No substitute rate or USD balance is invented for an offline statement export.
+
+## Native Office and account security update
+
+Normal Excel downloads are native `.xlsx`, and Word statement/certificate downloads are native `.docx`. Saved formats remain native Office documents; HTML is used only for an explicit print preview. Page margins, paragraph spacing, font and alignment tools and native-format download are available in the editor. The browser editor supports common Office features and is not a full Microsoft 365 instance. Legacy binary `.doc` conversion still needs a local conversion engine.
+
+**Security & Login** lets every user change their password with the current password. Five consecutive failed sign-in attempts persistently lock an account across devices. Admins can unlock login or reset a user password, and can generate ten hashed, single-use recovery codes. The login page provides admin recovery. Existing accounts and password hashes survive startup; a new installation generates a private initial login file next to its database. Never commit that file.

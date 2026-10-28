@@ -67,6 +67,7 @@ from statement_generator.generator import (  # noqa: E402
 )
 from statement_generator.rounding import parse_percentages
 from statement_generator.office_formats import convert_office, editable_office_copy
+from statement_generator.native_workspace import native_statement_word, page_settings, update_page_settings, repair_native_text
 from statement_generator.document_layout import word_html
 from statement_generator.sample_documents import sample_html
 from statement_generator.letterheads import load_letterhead, save_letterhead
@@ -1814,12 +1815,14 @@ def template_detail(kind: str, template_name: str, template_dir_text: str, user_
     if selected is None:
         raise ValueError("Selected template was not found.")
     selected = _require_custom_template_entry(normalized_kind, template_name, template_dir_text, user_id)
+    repair_native_text(editable_office_copy(selected.path))
     meta = _read_template_meta(selected.path)
     profile = _coerce_template_profile(meta.get("profile", {}))
     scan = scan_template_file(normalized_kind, selected.path, profile)
     if selected.source == "custom":
         _rescan_and_save_template_meta(normalized_kind, selected.path, profile)
     return {
+        'page_setup':page_settings(editable_office_copy(selected.path),normalized_kind),
         "kind": normalized_kind,
         "name": selected.name,
         "suffix": selected.path.suffix.lower(),
@@ -2326,6 +2329,9 @@ def update_template_item(
     selected = _require_custom_template_entry(normalized_kind, template_name, template_dir_text, user_id)
     style = style_payload if isinstance(style_payload, dict) else {}
     working_path = editable_office_copy(selected.path)
+    if key=='__page_setup__':
+        update_page_settings(working_path,normalized_kind,style.get('page_setup',{}))
+        return _rescan_and_save_template_meta(normalized_kind,selected.path)
     if normalized_kind == "statement":
         if working_path.suffix.lower() != ".xlsx":
             raise ValueError("Excel format editing needs an uploaded .xlsx file.")
@@ -2357,7 +2363,8 @@ def update_template_batch(kind, name, template_dir, user_id, edits):
             if not isinstance(edit, dict) or not edit.get('key'):
                 raise ValueError('Invalid format edit.')
             updater = update_excel_template_item if kind == 'statement' else update_word_template_item
-            updater(temporary, str(edit['key']), str(edit.get('text', '')), dict(edit.get('style') or {}))
+            if edit['key']=='__page_setup__':update_page_settings(temporary,kind,dict(edit.get('style') or {}).get('page_setup',{}))
+            else:updater(temporary, str(edit['key']), str(edit.get('text', '')), dict(edit.get('style') or {}))
         temporary.replace(original)
         _rescan_and_save_template_meta(kind, selected.path)
     finally:
@@ -3192,7 +3199,14 @@ def record_login_attempt(client_ip: str, username: str, success: bool) -> None:
         ]
         failures.append(now)
         locked_until = now + LOGIN_WINDOW_SECONDS if len(failures) >= LOGIN_MAX_FAILURES else 0
-        attempts[key] = {"failures": failures, "locked_until": locked_until}
+        attempts[key] = {"failures": failures, "locked_until": locked_until, "user_key": hashlib.sha256(username.strip().lower().encode()).hexdigest()}
+        _write_login_attempts(attempts)
+
+
+def clear_user_login_attempts(username: str) -> None:
+    with LOGIN_ATTEMPT_LOCK:
+        attempts=_read_login_attempts();key=hashlib.sha256(username.strip().lower().encode()).hexdigest()
+        attempts={name:record for name,record in attempts.items() if record.get('user_key')!=key}
         _write_login_attempts(attempts)
 
 
@@ -3228,6 +3242,16 @@ class StatementWebHandler(BaseHTTPRequestHandler):
         try:
             parsed = urlparse(self.path)
             route = parsed.path
+            if route == '/api/account_security':
+                self._send_json(auth_store().security_status(self._require_user()))
+                return
+            if route == '/api/template_download':
+                current_user=self._require_statement_user()
+                query=parse_qs(parsed.query)
+                selected=_require_custom_template_entry((query.get('kind') or [''])[0],(query.get('name') or [''])[0],default_form_values()['template_dir'],current_user.id)
+                native=editable_office_copy(selected.path)
+                self._send_download(native.read_bytes(),native.name)
+                return
             if route in {"/", "/index.html"}:
                 self._serve_file(APP_ROOT / "templates" / "index.html", "text/html; charset=utf-8")
                 return
@@ -3355,6 +3379,37 @@ class StatementWebHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         try:
             route = urlparse(self.path).path
+            origin=self.headers.get('Origin','')
+            if self.headers.get('Sec-Fetch-Site','')=='cross-site' or (origin and urlparse(origin).netloc.lower()!=self.headers.get('Host','').lower()):
+                raise PermissionError('Requests must come from this website.')
+
+            if route == '/api/change_own_password':
+                user=self._require_user();payload=self._read_json_body()
+                if payload.get('new_password')!=payload.get('confirm_password'):
+                    raise ValueError('New passwords do not match.')
+                auth_store().change_own_password(user,str(payload.get('current_password','')),str(payload.get('new_password','')))
+                self._send_json({'ok':True,'requires_login':True});return
+            if route == '/api/unlock_user_login':
+                user=self._require_admin();payload=self._read_json_body()
+                if not auth_store().verify_user_password(user.id,str(payload.get('admin_password',''))):
+                    raise PermissionError('Enter your current admin password.')
+                updated=auth_store().unlock_user_login(int(payload.get('user_id',0)))
+                clear_user_login_attempts(updated.username)
+                self._send_json({'updated_user':updated.as_payload(),'users':auth_store().list_users()});return
+            if route == '/api/recovery_codes':
+                user=self._require_admin();payload=self._read_json_body()
+                self._send_json({'codes':auth_store().generate_recovery_codes(user,str(payload.get('current_password','')))});return
+            if route == '/api/recover_admin':
+                payload=self._read_json_body();username=str(payload.get('username',''))
+                assert_login_not_rate_limited(self._client_ip(),'recovery:'+username)
+                try:
+                    if payload.get('new_password')!=payload.get('confirm_password'):
+                        raise ValueError('New passwords do not match.')
+                    auth_store().recover_admin_password(username,str(payload.get('recovery_code','')),str(payload.get('new_password','')))
+                except ValueError:
+                    record_login_attempt(self._client_ip(),'recovery:'+username,False);raise
+                record_login_attempt(self._client_ip(),'recovery:'+username,True);clear_user_login_attempts(username)
+                self._send_json({'ok':True,'requires_login':True});return
 
             if route == "/api/login":
                 payload = self._read_json_body()
@@ -3776,6 +3831,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
                     int(payload.get("user_id", 0) or 0),
                     str(payload.get("new_password", "")),
                 )
+                clear_user_login_attempts(updated_user.username)
                 auth_store().log_activity(current_user.id, current_user.username, "change_user_password", f"Changed password for {updated_user.username}.")
                 self._send_json({"updated_user": updated_user.as_payload(), "users": auth_store().list_users()})
                 return
@@ -3896,7 +3952,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
         del exchange_rate
 
         if export_mode == "normal":
-            suffix = ".xls" if export_kind == "statement" and not statement_word else ".doc"
+            suffix = ".xlsx" if export_kind == "statement" and not statement_word else ".docx"
             template_name = "normal"
             body = (
                 build_normal_statement_bytes(export_payload)
@@ -3910,10 +3966,10 @@ class StatementWebHandler(BaseHTTPRequestHandler):
             selected = resolve_template_entry(export_kind, template_name, template_dir, current_user.id)
             if selected is None:
                 raise ValueError(f"Selected {export_kind} template was not found.")
-            suffix = selected.path.suffix
+            suffix = '.xlsx' if export_kind=='statement' else '.docx'
 
         filename = default_output_name(export_kind, config.customer_name, template_name or "normal", result.issue_date, suffix)
-        if export_mode == "normal" and not include_letterhead:
+        if export_mode == "normal" and preview_html:
             self._send_download(sample_html(body.decode("utf-8")).encode("utf-8"), filename)
             return
 
@@ -3922,12 +3978,10 @@ class StatementWebHandler(BaseHTTPRequestHandler):
         temp_dir.mkdir(parents=True, exist_ok=True)
         try:
             output_path = temp_dir / filename
-            if include_letterhead and export_mode == "normal":
+            if export_mode == "normal":
                 working_output = output_path.with_suffix(".xlsx" if export_kind == "statement" and not statement_word else ".docx")
                 if statement_word:
-                    html_source = temp_dir / "statement.html"
-                    html_source.write_bytes(sample_html(body.decode("utf-8")).encode("utf-8"))
-                    convert_office(html_source, working_output)
+                    native_statement_word(working_output,export_payload)
                 else:
                     (export_normal_statement if export_kind == "statement" else export_normal_certificate)(working_output, export_payload)
             else:

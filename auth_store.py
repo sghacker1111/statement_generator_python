@@ -7,15 +7,17 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import sqlite3
 import threading
 from pathlib import Path
 from typing import Any, Iterator
 from uuid import uuid4
+from account_security import AccountSecurityMixin
 
 
 ADMIN_USERNAME = "sgstatement"
-ADMIN_PASSWORD = "SG@hacker@19909"
+ADMIN_PASSWORD = os.environ.get('SGV2_BOOTSTRAP_ADMIN_PASSWORD') or secrets.token_urlsafe(36)
 PASSWORD_SCHEME = "pbkdf2_sha256"
 PASSWORD_ITERATIONS = 200_000
 DEFAULT_DEVICE_LIMIT = 2
@@ -64,6 +66,7 @@ class AuthUser:
     gender: str = ""
     is_hidden: bool = False
     is_blocked: bool = False
+    login_locked: bool = False
 
     @property
     def is_admin(self) -> bool:
@@ -109,13 +112,14 @@ class AuthUser:
             "gender": self.gender,
             "is_hidden": self.is_hidden,
             "is_blocked": self.is_blocked,
+            "login_locked": self.login_locked,
         }
 
 
-class AuthStore:
+class AuthStore(AccountSecurityMixin):
     def __init__(self, database_path: Path) -> None:
         self.database_path = database_path
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._initialize()
 
     @contextmanager
@@ -209,11 +213,16 @@ class AuthStore:
                 """
             )
 
+            self._security_schema(connection)
             admin_row = connection.execute(
                 "SELECT id, password_hash, role FROM users WHERE username = ?",
                 (ADMIN_USERNAME,),
             ).fetchone()
             if admin_row is None:
+                credential_file=self.database_path.with_name(self.database_path.name+'.admin-login.txt')
+                if not credential_file.exists():
+                    with credential_file.open('x',encoding='utf-8') as private:
+                        private.write('Username: '+ADMIN_USERNAME+'\nPassword: '+ADMIN_PASSWORD+'\n')
                 connection.execute(
                     """
                     INSERT INTO users (
@@ -230,14 +239,14 @@ class AuthStore:
                         DEFAULT_DEVICE_LIMIT,
                     ),
                 )
-            elif not verify_password_hash(ADMIN_PASSWORD, str(admin_row["password_hash"])) or str(admin_row["role"]) != "admin":
+            elif str(admin_row["role"]) != "admin":
                 connection.execute(
                     """
                     UPDATE users
-                    SET password_hash = ?, role = 'admin', access_mode = 'unlimited', saved_profile_formats_json = COALESCE(saved_profile_formats_json, ''), device_limit = ?, full_name = COALESCE(NULLIF(full_name, ''), 'SGHACKER WEB TOOL')
+                    SET role = 'admin', access_mode = 'unlimited', saved_profile_formats_json = COALESCE(saved_profile_formats_json, ''), device_limit = ?, full_name = COALESCE(NULLIF(full_name, ''), 'SGHACKER WEB TOOL')
                     WHERE id = ?
                     """,
-                    (hash_password(ADMIN_PASSWORD), DEFAULT_DEVICE_LIMIT, int(admin_row["id"])),
+                    (DEFAULT_DEVICE_LIMIT, int(admin_row["id"])),
                 )
             connection.commit()
 
@@ -276,6 +285,7 @@ class AuthStore:
             gender=str(row["gender"]) if "gender" in row.keys() else "",
             is_hidden=bool(row["is_hidden"]) if "is_hidden" in row.keys() else False,
             is_blocked=bool(row["is_blocked"]) if "is_blocked" in row.keys() else False,
+            login_locked=self.security_status(int(row['id']))['login_locked'],
         )
 
     def _normalize_device_id(self, device_id: str) -> str:
@@ -403,8 +413,13 @@ class AuthStore:
                 """,
                 (normalized,),
             ).fetchone()
-            if row is None or not verify_password_hash(password, str(row["password_hash"])):
+            if row is None:
                 raise ValueError("Invalid username or password.")
+            correct=verify_password_hash(password,str(row['password_hash']))
+            if self._login_attempt(connection,int(row['id']),correct):
+                raise PermissionError('Account locked after 5 incorrect login attempts. Contact the administrator. Admins can use a recovery code.')
+            if not correct:
+                raise ValueError('Invalid username or password.')
             if row["is_blocked"]:
                 raise PermissionError("This account is blocked. Contact the administrator.")
             self._register_device_or_throw(connection, row, device_id, device_label)
@@ -461,7 +476,7 @@ class AuthStore:
 
     def require_user(self, token: str) -> AuthUser:
         user = self.user_for_token(token)
-        if user is None or user.is_blocked:
+        if user is None or user.is_blocked or self.security_status(user)['login_locked']:
             raise PermissionError("Please log in first.")
         return user
 
@@ -641,13 +656,14 @@ class AuthStore:
             ).fetchone()
             if row is None:
                 raise ValueError("Select a valid user first.")
-            if str(row["username"]) == ADMIN_USERNAME:
-                raise ValueError("The main admin password is locked in this web app package.")
+            if str(row['role'])=='admin' and len(new_password)<12:
+                raise ValueError('New password must be at least 12 characters.')
             connection.execute(
                 "UPDATE users SET password_hash = ? WHERE id = ?",
                 (hash_password(new_password), target_user_id),
             )
             connection.execute("DELETE FROM auth_tokens WHERE user_id = ?", (target_user_id,))
+            connection.execute('UPDATE account_security SET failed_attempts=0,login_locked=0 WHERE user_id=?',(target_user_id,))
             connection.commit()
         user = self._row_to_user(row)
         if user is None:

@@ -313,8 +313,15 @@ class ImportCheckTests(unittest.TestCase):
                                               'rate_mode': 'Manual', 'manual_rate': '140'}
                             status, exported = request('/api/export', export_request)
                             self.assertEqual(status, 200, exported)
-                            self.assertIn(b'Transfer in', exported)
-                            self.assertIn(b'383,742', exported)
+                            from io import BytesIO
+                            if file_type=='excel':
+                                from openpyxl import load_workbook
+                                workbook=load_workbook(BytesIO(exported));values=[cell.value for row in workbook.active for cell in row]
+                                self.assertIn('Transfer in',values);self.assertIn(383742,values);workbook.close()
+                            else:
+                                from docx import Document
+                                text='\n'.join(cell.text for table in Document(BytesIO(exported)).tables for row in table.rows for cell in row.cells)
+                                self.assertIn('Transfer in',text);self.assertIn('383,742',text)
                         for invalid in ({**export_request, 'result_payload': None},
                                         {**export_request, 'source_type': 'generated'},
                                         {**export_request, 'statement_id': 0}):

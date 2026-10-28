@@ -1,3 +1,4 @@
+import { setupAccountSecurity } from './account-security.js?v=20261028-native';
 import { setupPdfImport } from './pdf-import.js?v=20261008-detailed';
 import { setupStatementCorrections } from './statement-corrections.js?v=20261008-detailed';
 // Shared web workspace for the PHP and Python editions.
@@ -50,6 +51,7 @@ export function createWorkspace(h) {
     ['formats','Format Manager','Templates, editor & letterheads'], ['history','Saved Statements','History & previous work'],
     ['users','User Management','Details, access & status'], ['create-user','Create User','Add a new account'],
     ['devices','Devices & Activity','Sessions & account activity'],
+    ['security','Security & Login','Password & admin recovery'],
   ];
   const adminViews = new Set(['users','create-user']);
   const titles = Object.fromEntries(navItems.map(([id,title])=>[id,title]));
@@ -78,6 +80,8 @@ export function createWorkspace(h) {
   document.addEventListener('keydown',e=>{if(e.key==='Escape' && innerWidth<1000) toggleSidebar(true);});
 
   const home=section('home-panel','Welcome back','Your statement workspace, at a glance.');
+  const securityPanel=section('security-panel','Security & Login','Change your password, review account lockout rules and manage admin recovery.');
+  const accountSecurity=setupAccountSecurity({panel:securityPanel,apiUrl:h.apiUrl,fetchJson:h.fetchJson,state:h.state,logout:h.logout,requestPassword:h.requestPassword,renderUsers:h.renderUsers,log:h.log});
   home.innerHTML+=`<div class="dashboard-cards"><article><span>Generated in the last 7 days</span><strong id="dashboard-week">0</strong></article><article><span>Generated this month</span><strong id="dashboard-month">0</strong></article><article><span>Saved statements in this view</span><strong id="dashboard-total">0</strong></article></div><div class="dashboard-chart-card"><div class="history-head"><h3>Generation activity</h3><select id="dashboard-period" aria-label="Chart period"><option value="weekly">Last 7 days</option><option value="monthly">Last 12 months</option></select></div><div id="dashboard-chart"></div><p class="muted">Counts reflect the saved history in this view (up to 50 recent records). Imported statements are excluded from generation counts.</p></div><div class="workspace-shortcuts"><button type="button" class="primary-button" data-go="generate">Create a statement</button><button type="button" class="ghost-button" data-go="check">Check an imported statement</button><button type="button" class="ghost-button" data-go="history">Open saved statements</button></div>`;
   const profiles=section('profiles-panel','Statement Profiles','Load a saved setup, edit Account, Statement Rules or Texts & Names, then save it here for further use.');
   const profileActions=document.createElement('div');profileActions.className='profile-workspace-actions';profiles.append(profileActions);
@@ -225,7 +229,8 @@ export function createWorkspace(h) {
     generationProfiles.hidden=next!=='generate';
     $('workspace-title').textContent=next==='profile-setup'?'Statement profile setup':titles[next]||'Statement workspace';
     const targets={home:'home-panel',generate:'account-panel',profiles:'profiles-panel',check:'check-panel',holidays:'holidays-panel',transfers:'export-panel',formats:'formats-panel',history:'history-panel',users:'admin-panel','create-user':'admin-panel',devices:'devices-panel'};
-    h.setTab(targets[next]||'account-panel');
+    h.setTab(next==='security'?'security-panel':(targets[next]||'account-panel'));
+    if(next==='security')accountSecurity.refresh().catch(error=>h.log(error.message,'error'));
     $('admin-create-card').hidden=next!=='create-user';
     for(const id of ['admin-manage-card','admin-users-card','admin-restore-dates-card','admin-database-card'])if($(id))$(id).hidden=next!=='users';
     for(const button of sidebar.querySelectorAll('[data-view]')){const active=button.dataset.view===next;button.classList.toggle('is-active',active);if(active)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');}
@@ -263,6 +268,7 @@ export function createWorkspace(h) {
     profiles(rows) {for(const id of ['check-profile-name','generation-profile-select']){const select=$(id),selected=select.value;select.replaceChildren(new Option(id==='check-profile-name'?'No saved profile (normal check)':'Select a saved profile',''));for(const row of rows||[]){const name=typeof row==='string'?row:row.name;if(name)select.add(new Option(name,name));}select.value=selected;}},
     history(payload){history=payload?.history||[];renderDashboard();},
     user(user){
+      accountSecurity.user(user);
       sidebar.querySelectorAll('[data-admin-nav]').forEach(el=>el.hidden=!user?.can_manage_users);
       const generate=canGenerateStatements(user);
       document.body.classList.toggle('checker-only',user?.access_mode==='check_only');

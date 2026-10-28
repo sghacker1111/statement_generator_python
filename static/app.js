@@ -1,9 +1,9 @@
-import { createWorkspace } from "./workspace.js?v=20261008-detailed";
+import { createWorkspace } from "./workspace.js?v=20261028-native";
 import { canGenerateStatements } from "./preview-workspace.js?v=20261007-preview";
 let workspaceUI = null;
 let authBusy = false;
 let sessionEpoch = 0;
-import { createOfficeWorkspace } from "./office-workspace.js?v=20260915-office";
+import { createOfficeWorkspace } from "./office-workspace.js?v=20261028-native";
 const rootUrl = new URL("./", window.location.href);
 const apiUrl = (action, params = null) => {
   const url = new URL(`api/${action}`, rootUrl);
@@ -1838,6 +1838,7 @@ function compactFormatRibbon() {
     return;
   }
   const makeMenu = (group, icon, title, selectors, extraNodes = []) => {
+    if (innerWidth >= 1200) { for (const node of extraNodes) group.append(node); return; }
     const details = document.createElement("details");
     details.className = "ribbon-menu";
     details.title = title;
@@ -4284,6 +4285,7 @@ async function changeSelectedUserPassword() {
   renderUsers(payload.users || []);
   document.getElementById("manage-user-password").value = "";
   appendLog(`Changed password for ${payload.updated_user.username}.`);
+  if(String(payload.updated_user.id)===String(state.currentUser?.id)){await logout();return;}
   await refreshActivities();
 }
 
@@ -5447,7 +5449,7 @@ function bindEvents() {
 }
 
 workspaceUI = createWorkspace({
-  state, apiUrl, fetchJson, requestPassword, setTab, getValues:getFormValues, applyValues:applyFormValues,
+  state, apiUrl, fetchJson, requestPassword, logout, setTab, getValues:getFormValues, applyValues:applyFormValues,
   clearStatement:clearCurrentStatement, saveDraft:saveDraftProfile, scheduleSave:scheduleAutoProfileSave,
   renderUsers, log:appendLog, loadProfile:loadProfileFormat, importStatement:importStatementFile,
   validateStatement:validateCurrentStatement,

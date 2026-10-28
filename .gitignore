@@ -10,6 +10,7 @@ __pycache__/
 *.log
 ._*
 web_statement_generator.db
+*.admin-login.txt
 web_statement_generator_state.json
 login_attempts.json
 user_state/
