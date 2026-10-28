@@ -3,6 +3,7 @@ export function createOfficeWorkspace({apiUrl,fetchJson,state,formatSheetHost,ge
   const scriptRoot = new URL('.', import.meta.url);
   let letterheadRequest = 0;
   let pageBaseline = '';
+  const signature=node=>node.innerHTML+'|'+node.getAttribute('style')+'|'+(node.dataset.numberFormat||'');
   function pageSettings() {
     const value={orientation:state.formatWorkspaceOrientation||'portrait'};
     for(const side of ['top','right','bottom','left']) value[side]=Number(document.getElementById(`office-page-${side}`)?.value||0);
@@ -107,7 +108,7 @@ table{max-width:100%}tr{break-inside:avoid}thead{display:table-header-group}
     picker.replaceChildren(...sheets.map(sheet => { const option = document.createElement('option'); option.value=sheet.name; option.textContent=sheet.name; return option; }));
     picker.value = detail.active_sheet || sheets[0].name;
     picker.onchange = () => {
-      const dirty = Array.from(formatSheetHost.querySelectorAll('[data-format-key]')).some(node => state.officeBaseline?.get(node.dataset.formatKey) !== node.innerHTML + '|' + node.getAttribute('style'));
+      const dirty = Array.from(formatSheetHost.querySelectorAll('[data-format-key]')).some(node => state.officeBaseline?.get(node.dataset.formatKey) !== signature(node));
       if (dirty) { picker.value=detail.active_sheet || sheets[0].name; showFormatSaveStatus('Save your format changes before switching worksheets.', 'error'); return; }
       detail.active_sheet=picker.value; render(detail);
     };
@@ -115,7 +116,7 @@ table{max-width:100%}tr{break-inside:avoid}thead{display:table-header-group}
   function rememberWorkspace() {
     const detail = state.templateEditorDetail;
     if (!detail) return;
-    state.officeBaseline = new Map(Array.from(formatSheetHost?.querySelectorAll('[data-format-key]') || [], node => [node.dataset.formatKey, node.innerHTML + '|' + node.getAttribute('style')]));
+    state.officeBaseline = new Map(Array.from(formatSheetHost?.querySelectorAll('[data-format-key]') || [], node => [node.dataset.formatKey, signature(node)]));
     const page=detail.page_setup||detail.scan?.page_setup||{top:16,bottom:16,left:12,right:12,orientation:'portrait'};
     state.formatWorkspaceOrientation=page.orientation||'portrait';
     for(const side of ['top','right','bottom','left']) {const input=document.getElementById(`office-page-${side}`);if(input)input.value=page[side]??12;}
@@ -128,7 +129,7 @@ table{max-width:100%}tr{break-inside:avoid}thead{display:table-header-group}
     if(JSON.stringify(pageSettings())!==pageBaseline)edits.push({key:'__page_setup__',text:'',style:{page_setup:pageSettings()}});
     for (const node of formatSheetHost.querySelectorAll('[data-format-key]')) {
       const key = node.dataset.formatKey;
-      if (state.officeBaseline?.get(key) === node.innerHTML + '|' + node.getAttribute('style')) continue;
+      if (state.officeBaseline?.get(key) === signature(node)) continue;
       const style = {};
       const css = node.style;
       for (const [key,prop] of Object.entries({font_name:'fontFamily',font_size:'fontSize',font_color:'color',fill_color:'backgroundColor',horizontal:'textAlign',vertical:'verticalAlign',left_indent:'paddingLeft',first_line_indent:'textIndent',space_before:'marginTop',space_after:'marginBottom',line_spacing:'lineHeight'})) if (css[prop]) style[key] = css[prop];
@@ -169,6 +170,11 @@ table{max-width:100%}tr{break-inside:avoid}thead{display:table-header-group}
         const select=document.createElement('select');select.id='office-number-preset';select.setAttribute('aria-label','Number format preset');
         const choices=[['General','General'],['Number','0.00'],['Currency','"NPR "#,##0.00'],['Accounting','#,##0.00;[Red](#,##0.00)'],['Short date','yyyy-mm-dd'],['Long date','dd mmmm yyyy'],['Percentage','0.00%'],['Fraction','# ?/?'],['Scientific','0.00E+00'],['Text','@']];
         for(const [label,value]of choices)select.add(new Option(label,value));numbers.before(select);
+        numbers.addEventListener('change',()=>{
+          for(const node of formatSheetHost.querySelectorAll('[data-format-key]')){
+            if((state.formatWorkspaceSelectedKeys||[]).includes(node.dataset.formatKey)||node.dataset.formatKey===state.formatWorkspaceSelectedKey){node.dataset.numberFormat=numbers.value;node.title=`Number format: ${numbers.value}`;}
+          }
+        });
         select.onchange=()=>{numbers.value=select.value;numbers.dispatchEvent(new Event('change',{bubbles:true}));};
       }
       const paragraph=document.createElement('div');paragraph.className='ribbon-group';paragraph.innerHTML='<span class="ribbon-label">Paragraph spacing</span><label>Before <input id="office-space-before" type="number" min="0" max="200" value="0" aria-label="Paragraph spacing before (pt)"></label><label>After <input id="office-space-after" type="number" min="0" max="200" value="0" aria-label="Paragraph spacing after (pt)"></label>';
@@ -181,7 +187,7 @@ table{max-width:100%}tr{break-inside:avoid}thead{display:table-header-group}
       document.getElementById('download-native-format').onclick=async()=>{
         try{
           const detail=state.templateEditorDetail;if(!detail)throw new Error('Open a format first.');
-          const dirty=Array.from(formatSheetHost.querySelectorAll('[data-format-key]')).some(node=>state.officeBaseline?.get(node.dataset.formatKey)!==node.innerHTML+'|'+node.getAttribute('style'));
+          const dirty=Array.from(formatSheetHost.querySelectorAll('[data-format-key]')).some(node=>state.officeBaseline?.get(node.dataset.formatKey)!==signature(node));
           if(dirty || JSON.stringify(pageSettings())!==pageBaseline)throw new Error('Save All Format Changes before downloading your format.');
           const url=new URL(apiUrl('template_download'),location.href);url.searchParams.set('kind',detail.kind);url.searchParams.set('name',detail.name);
           const response=await fetch(url,{headers:state.authToken?{Authorization:`Bearer ${state.authToken}`}:{}});

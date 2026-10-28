@@ -3,7 +3,7 @@ import { canGenerateStatements } from "./preview-workspace.js?v=20261007-preview
 let workspaceUI = null;
 let authBusy = false;
 let sessionEpoch = 0;
-import { createOfficeWorkspace } from "./office-workspace.js?v=20261028-native";
+import { createOfficeWorkspace } from "./office-workspace.js?v=20261028-native2";
 const rootUrl = new URL("./", window.location.href);
 const apiUrl = (action, params = null) => {
   const url = new URL(`api/${action}`, rootUrl);

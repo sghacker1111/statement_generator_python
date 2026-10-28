@@ -2225,6 +2225,12 @@ def update_word_template_item(path: Path, key: str, text: str, style_payload: di
                 target_paragraph.paragraph_format.line_spacing = float(line_spacing)
             except Exception:
                 pass
+        for name in ['space_before','space_after']:
+            if name in style_payload:
+                from docx.shared import Pt
+                raw=str(style_payload[name]);match=re.fullmatch(r'\s*([\d.]+)\s*(pt|px)?\s*',raw)
+                if match:
+                    setattr(target_paragraph.paragraph_format,name,Pt(float(match[1])*(.75 if match[2]=='px' else 1)))
         indent = style_payload.get("indent", None)
         if indent is not None:
             from docx.shared import Pt  # noqa: E402
