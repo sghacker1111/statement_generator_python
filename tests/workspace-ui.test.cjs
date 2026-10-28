@@ -7,7 +7,21 @@ const root=path.resolve(__dirname,'..');
 const assets=fs.existsSync(path.join(root,'assets'))?'assets':'static';
 const source=fs.readFileSync(path.join(root,assets,'workspace.js'),'utf8');
 const ctx=vm.createContext({Date,JSON});
-vm.runInContext(source.replace(/^import .*;\r?\n/gm,'').replaceAll('export ','')+'\nthis.api={descriptionParts,dashboardSeries,checkingValues};',ctx);
+vm.runInContext(source.replace(/^import .*;\r?\n/gm,'').replaceAll('export ','')+'\nthis.api={descriptionParts,dashboardSeries,checkingValues,createWorkspace};',ctx);
+
+test('all rendered sidebar items have an icon, including Security & Login',()=>{
+  let markup='';
+  const rendered=new Error('Sidebar captured');
+  ctx.document={getElementById:()=>({}),createElement:()=>({}),body:{prepend(node){markup=node.innerHTML;throw rendered;}}};
+  try { assert.throws(()=>ctx.api.createWorkspace({}),error=>error===rendered); }
+  finally { delete ctx.document; }
+  const icons=[...markup.matchAll(/data-view="([^"]+)"[^>]*><span class="nav-symbol" aria-hidden="true">([^<]*)<\/span>/g)];
+  assert.ok(icons.length>10);
+  assert.ok(icons.every(([,id,icon])=>icon.trim() && icon!=='undefined'), 'Every sidebar item needs a visible icon');
+  assert.equal(icons.find(([,id])=>id==='security')?.[2],'⚿');
+  assert.match(markup,/Security & Login/);
+  assert.doesNotMatch(markup,/undefined/);
+});
 test('checking description options persist in check requests and never affect generation',()=>{
   for(const scope of ['labels','labels_extra']){
     const values=ctx.api.checkingValues({deposit_text:'Deposit',description_extra_text:'Reference'},true,'profile','Existing',scope);
@@ -40,6 +54,21 @@ test('empty and invalid history gives a zero chart',()=>{
 });
 
 const app=fs.readFileSync(path.join(root,assets,'app.js'),'utf8');
+
+test('header renders the exchange-rate date from either edition without object text',()=>{
+  const note={textContent:''};
+  const context=vm.createContext({accessSummaryNote:note});
+  const match=app.match(/^function renderAccessSummary\([^]*?(?=^(?:async )?function )/m);
+  vm.runInContext(match[0],context);
+  for(const source_date of ['2026-10-28',{date:'2026-10-28 00:00:00.000000',timezone:'Asia/Kathmandu'}]) {
+    context.renderAccessSummary({access_mode:'unlimited'},{rate:152.49,source_date});
+    assert.equal(note.textContent,'NRB sell rate: 152.4900 on 2026-10-28');
+  }
+  context.renderAccessSummary({access_mode:'check_only'},{rate:152.49,source_date:{}});
+  assert.equal(note.textContent,'Access: Statement Check only');
+  context.renderAccessSummary(null);
+  assert.equal(note.textContent,'');
+});
 test('quick generation profile loading applies existing settings and refreshes dependent choices',async()=>{
   const calls=[];
   const profile={customer_name:'Sample customer',deposit_text:'CASH DEPOSIT',interest_text:'Quarterly Return',tax_text:'Withholding'};

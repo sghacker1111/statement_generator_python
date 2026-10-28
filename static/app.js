@@ -1,4 +1,4 @@
-import { createWorkspace } from "./workspace.js?v=20261028-native";
+import { createWorkspace } from "./workspace.js?v=20261028-security-nav";
 import { canGenerateStatements } from "./preview-workspace.js?v=20261007-preview";
 let workspaceUI = null;
 let authBusy = false;
@@ -659,8 +659,11 @@ function renderAccessSummary(user, liveRate = null) {
   if (user.access_mode === "check_only") {
     fragments.push("Access: Statement Check only");
   }
-  if (liveRate?.rate && liveRate?.source_date) {
-    fragments.push(`NRB sell rate: ${Number(liveRate.rate).toFixed(4)} on ${liveRate.source_date}`);
+  const rawSourceDate = liveRate?.source_date;
+  const sourceDate = typeof rawSourceDate === "string" ? rawSourceDate
+    : typeof rawSourceDate?.date === "string" ? rawSourceDate.date.split(/[T ]/)[0] : "";
+  if (liveRate?.rate && sourceDate) {
+    fragments.push(`NRB sell rate: ${Number(liveRate.rate).toFixed(4)} on ${sourceDate}`);
   }
   accessSummaryNote.textContent = fragments.join(" | ");
 }

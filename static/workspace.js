@@ -54,13 +54,14 @@ export function createWorkspace(h) {
     ['security','Security & Login','Password & admin recovery'],
   ];
   const adminViews = new Set(['users','create-user']);
+  const navSymbols = {home:'⌂',generate:'＋',profiles:'▤',check:'✓',holidays:'▦',transfers:'⇅',formats:'▧',history:'◷',users:'◎','create-user':'＋',devices:'⚙',security:'⚿'};
   const titles = Object.fromEntries(navItems.map(([id,title])=>[id,title]));
   const section = (id, title, intro) => {
     const el=document.createElement('section'); el.id=id; el.className='form-panel';
     el.innerHTML=`<div class="section-head"><h2>${title}</h2><p>${intro}</p></div>`; form.append(el); return el;
   };
   const sidebar=document.createElement('aside'); sidebar.id='workspace-sidebar'; sidebar.className='workspace-sidebar';
-  sidebar.innerHTML=`<a class="workspace-brand" href="#home"><span class="brand-mark">S</span><span>Statement Studio<small>YOUR WORKSPACE</small></span></a><p class="nav-label">WORKSPACE</p><nav aria-label="Main navigation">${navItems.map(([id,title,desc],i)=>`<button type="button" data-view="${id}"${adminViews.has(id)?' data-admin-nav':''}><span class="nav-symbol" aria-hidden="true">${['⌂','＋','▤','✓','▦','⇅','▧','◷','◎','＋','⚙'][i]}</span><span>${title}<small>${desc}</small></span></button>`).join('')}</nav><p class="sidebar-note">Your saved profiles, formats and statement history stay with your account.</p>`;
+  sidebar.innerHTML=`<a class="workspace-brand" href="#home"><span class="brand-mark">S</span><span>Statement Studio<small>YOUR WORKSPACE</small></span></a><p class="nav-label">WORKSPACE</p><nav aria-label="Main navigation">${navItems.map(([id,title,desc])=>`<button type="button" data-view="${id}"${adminViews.has(id)?' data-admin-nav':''}><span class="nav-symbol" aria-hidden="true">${navSymbols[id] || '•'}</span><span>${title}<small>${desc}</small></span></button>`).join('')}</nav><p class="sidebar-note">Your saved profiles, formats and statement history stay with your account.</p>`;
   document.body.prepend(sidebar);
   const topbar=document.querySelector('.topbar');
   const heading=document.createElement('div'); heading.className='workspace-heading';
