@@ -275,107 +275,161 @@ def export_normal_statement(output_path: Path, payload: dict) -> None:
     if Workbook is None:
         raise RuntimeError("Normal Excel export dependency is missing in this environment.")
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Statement"
+    from textwrap import wrap
+    from openpyxl.utils import get_column_letter
+    from .sample_documents import SAMPLE_LABEL
 
-    title_fill = PatternFill("solid", fgColor="1F4E78")
-    header_fill = PatternFill("solid", fgColor="D9EAF7")
-    thin = Side(style="thin", color="9AA5B1")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Statement"
+    sheet.sheet_view.showGridLines = False
 
-    statement_payload = payload.get("statement", {})
-    include_cheque = bool(statement_payload.get("include_cheque_column", True))
-    two_date_columns = statement_payload.get("date_column_mode") == "txn_value"
-    total_columns = (2 if two_date_columns else 1) + 4 + (1 if include_cheque else 0)
-    merge_end_column = chr(ord("A") + total_columns - 1)
-    ws.merge_cells(f"A1:{merge_end_column}1")
-    ws["A1"] = "BANK STATEMENT"
-    ws["A1"].font = Font(size=16, bold=True, color="FFFFFF")
-    ws["A1"].fill = title_fill
-    ws["A1"].alignment = Alignment(horizontal="center")
+    statement = payload["statement"]
+    account = payload["account"]
+    rates = payload["rates"]
+    summary = payload["summary"]
+    transactions = payload["statement_rows"]
+    two_dates = statement.get("date_column_mode") == "txn_value"
+    include_cheque = bool(statement.get("include_cheque_column", True))
 
-    ws["A3"] = "Name"
-    ws["B3"] = payload["account"]["customer_name"]
-    ws["D3"] = "Account No."
-    ws["E3"] = payload["account"]["account_number"]
-    ws["A4"] = "Address"
-    ws["B4"] = payload["account"]["customer_address"]
-    ws["D4"] = "Account Type"
-    ws["E4"] = payload["account"]["account_type"]
-    ws["A5"] = "Statement Period"
-    ws["B5"] = payload["statement"]["period_label_slash"]
-    ws["D5"] = "Issue Date"
-    ws["E5"] = payload["statement"]["issue_date_slash"]
-    ws["A6"] = "Interest Rate"
-    ws["B6"] = f"{payload['rates']['interest_rate']}%"
-    ws["D6"] = "Tax Rate"
-    ws["E6"] = f"{payload['rates']['tax_rate']}%"
-
-    headers = ["TXN Date", "Value Date"] if two_date_columns else ["Date"]
-    headers.append("Description")
+    headers = ["TXN DATE", "VALUE DATE"] if two_dates else ["DATE"]
+    widths = [12.85546875] * len(headers)
+    description_column = len(headers) + 1
+    headers.append("DESCRIPTION")
+    widths.append(24.7109375)
     if include_cheque:
-        headers.append("Cheque No.")
-    headers.extend(["Debit", "Credit", "Balance"])
-    for col, header in enumerate(headers, start=1):
-        cell = ws.cell(row=8, column=col, value=header)
-        cell.font = Font(bold=True)
-        cell.fill = header_fill
-        cell.border = border
-        cell.alignment = Alignment(horizontal="center")
+        headers.append("CHEQUE NO.")
+        longest_cheque = max((len(str(row["cheque_no"])) for row in transactions), default=0)
+        widths.append(max(12.42578125, longest_cheque * .96 + 1.7))
 
-    row_index = 9
-    for item in payload["statement_rows"]:
-        date_cell = ws.cell(row=row_index, column=1, value=datetime.strptime(item.get("txn_date") or item["date"], "%Y-%m-%d").date())
-        date_cell.number_format = "yyyy-mm-dd"
-        date_cell.alignment = Alignment(wrap_text=False)
-        description_column = 2
-        if two_date_columns:
-            value_date_cell = ws.cell(row=row_index, column=2, value=datetime.strptime(item.get("value_date") or item["date"], "%Y-%m-%d").date())
-            value_date_cell.number_format = "yyyy-mm-dd"
-            value_date_cell.alignment = Alignment(wrap_text=False)
-            description_column = 3
-        description_cell = ws.cell(row=row_index, column=description_column, value=item["description"])
-        description_cell.number_format = "@"
-        amount_start_column = description_column + 1
+    money_format = "#,##0.00;(#,##0.00)"
+
+    def amount_width(value):
+        value = float(value)
+        display = f"{abs(value):,.2f}"
+        return (len(display) + (2 if value < 0 else 0)) * .96 + 1.7
+
+    headers.extend(["DEBIT", "CREDIT", "BALANCE"])
+    for key, width in [("debit", 15.28515625), ("credit", 14.85546875), ("balance", 15.140625)]:
+        summary_key = "final_balance" if key == "balance" else f"total_{key}"
+        widest_value = max((amount_width(row[key]) for row in transactions), default=0)
+        widths.append(max(width, widest_value, amount_width(summary[summary_key])))
+
+    columns = len(widths)
+    last_column = get_column_letter(columns)
+    for column, width in enumerate(widths, start=1):
+        sheet.column_dimensions[get_column_letter(column)].width = width
+
+    black = Side(style="medium", color="FF000000")
+    gray = Side(style="thin", color="FFD9D9D9")
+    white = Side(style="thin", color="FFFFFFFF")
+    outline = Border(left=black, right=black, top=black, bottom=black)
+    detail_border = Border(left=gray, right=gray, top=gray, bottom=gray)
+    grid = Border(left=white, right=white, top=white, bottom=white)
+    header_fill = PatternFill("solid", fgColor="FF000000")
+    row_fills = [PatternFill("solid", fgColor=color) for color in ("FFA6A6A6", "FFD9D9D9")]
+
+    def cell(row, column, value, *, span=1, size=10, bold=False, align="left",
+             border=None, fill=None, color="FF000000", number_format="General"):
+        item = sheet.cell(row, column, value)
+        if isinstance(value, str):
+            item.data_type = "s"
+            item.number_format = "@"
+        else:
+            item.number_format = number_format
+        item.font = Font(name="Arial", size=size, bold=bold, color=color)
+        item.alignment = Alignment(horizontal=align, vertical="center", wrap_text=True)
+        if border is not None:
+            item.border = border
+        if fill is not None:
+            item.fill = fill
+        if span > 1:
+            sheet.merge_cells(start_row=row, start_column=column, end_row=row, end_column=column + span - 1)
+
+    def wrapped_height(text, width, minimum):
+        lines = sum(max(1, len(wrap(line, width=max(1, int(width))))) for line in str(text).splitlines() or [""])
+        return max(minimum, 15.75 + (lines - 1) * 12)
+
+    cell(1, 1, "ACCOUNT STATEMENT", span=columns, size=16, bold=True, align="center", border=outline)
+    sheet.row_dimensions[1].height = 22.5
+    sheet.row_dimensions[2].height = 15.75
+    details = [
+        ("Name", account["customer_name"], "A/c Type", account["account_type"], 21.75),
+        ("Address", account["customer_address"], "Interest", f"{rates['interest_rate']}%", 33),
+        ("A/c No.", account["account_number"], "Tax", f"{rates['tax_rate']}%", 15.75),
+    ]
+    for row, (label, value, right_label, right_value, minimum) in enumerate(details, start=3):
+        top, bottom = (black if row == 3 else gray), (black if row == 5 else gray)
+        cell(row, 1, label, border=Border(left=black, right=gray, top=top, bottom=bottom))
+        cell(row, 2, str(value), span=columns - 3, border=Border(left=gray, right=gray, top=top, bottom=bottom))
+        cell(row, columns - 1, right_label, border=Border(left=gray, right=gray, top=top, bottom=bottom))
+        cell(row, columns, str(right_value), align="right", border=Border(left=gray, right=black, top=top, bottom=bottom))
+        sheet.row_dimensions[row].height = max(
+            wrapped_height(value, sum(widths[1:-2]), minimum),
+            wrapped_height(right_value, widths[-1], minimum),
+        )
+    sheet.row_dimensions[6].height = 15.75
+    period = f"FROM {statement['period_from_iso']} TO {statement['period_to_iso']}"
+    cell(7, 1, period, span=columns, size=11, align="center", border=outline)
+    sheet.row_dimensions[7].height = 20.25
+    for column, header in enumerate(headers, start=1):
+        cell(8, column, header, size=11, bold=True, align="center", border=grid, fill=header_fill, color="FFFFFFFF")
+    sheet.row_dimensions[8].height = 32.25
+
+    for row, transaction in enumerate(transactions, start=9):
+        fill = row_fills[(row - 9) % 2]
+        common = {"size": 9, "border": grid, "fill": fill}
+        dates = ([transaction.get(key) or transaction["date"] for key in ("txn_date", "value_date")]
+                 if two_dates else [transaction["date"]])
+        for column, value in enumerate(dates, start=1):
+            cell(row, column, date.fromisoformat(value), align="center", number_format="yyyy-mm-dd", **common)
+        description = transaction["description"]
+        cell(row, description_column, description, **common)
         if include_cheque:
-            cheque_text = str(item["cheque_no"]).strip()
-            cheque_value = int(cheque_text) if cheque_text.isdigit() else None
-            cheque_cell = ws.cell(row=row_index, column=description_column + 1, value=cheque_value)
-            cheque_cell.number_format = "0"
-            amount_start_column = description_column + 2
-        debit = float(item["debit"])
-        credit = float(item["credit"])
-        balance = float(item["balance"])
-        ws.cell(row=row_index, column=amount_start_column, value=debit if debit > 0 else None)
-        ws.cell(row=row_index, column=amount_start_column + 1, value=credit if credit > 0 else None)
-        ws.cell(row=row_index, column=amount_start_column + 2, value=balance)
-        for col in range(1, len(headers) + 1):
-            cell = ws.cell(row=row_index, column=col)
-            cell.border = border
-            if col >= amount_start_column and cell.value is not None:
-                cell.number_format = '_-* #,##0.00_-;\\-* #,##0.00_-;_-* "-"??_-;_-@_-'
-        row_index += 1
+            cell(row, description_column + 1, str(transaction["cheque_no"]) or None, align="center", **common)
+        for column, key in enumerate(("debit", "credit", "balance"), start=columns - 2):
+            amount = float(transaction[key])
+            cell(row, column, amount if key == "balance" or amount > 0 else None,
+                 align="right", number_format=money_format, **common)
+        sheet.row_dimensions[row].height = wrapped_height(description, widths[description_column - 1], 15.75)
 
-    widths = {"A": 14, "B": 14 if two_date_columns else 42, "C": 42 if two_date_columns else (16 if include_cheque else 14), "D": 16 if include_cheque else 14, "E": 14, "F": 14, "G": 16}
-    for column, width in widths.items():
-        if ord(column) - ord("A") + 1 > total_columns:
-            continue
-        ws.column_dimensions[column].width = width
-    ws.freeze_panes = "A9"
-    ws.page_setup.paperSize = ws.PAPERSIZE_A4
-    ws.page_setup.fitToWidth = 1
-    ws.page_setup.fitToHeight = 0
-    ws.sheet_properties.pageSetUpPr.fitToPage = True
-    ws.page_margins.left = 0.25
-    ws.page_margins.right = 0.25
-    ws.page_margins.top = 0.35
-    ws.page_margins.bottom = 0.35
-    ws.print_area = f"A1:{merge_end_column}{max(8, row_index - 1)}"
+    last_transaction = 8 + len(transactions)
+    heading = last_transaction + 2
+    sheet.row_dimensions[heading - 1].height = 15.75
+    cell(heading, 1, "Transaction Summary", span=columns, bold=True, align="center", border=outline)
+    sheet.row_dimensions[heading].height = 18.75
+    for column, span, label, value in [
+        (1, 1, "Issue Date", statement["issue_date_iso"]),
+        (2, 1, "Dr. Entry", float(summary["total_debit"])),
+        (3, columns - 4, "Cr. Entry", float(summary["total_credit"])),
+        (columns - 1, 2, "Closing Balance", float(summary["final_balance"])),
+    ]:
+        cell(heading + 1, column, label, span=span, bold=True, align="center", border=detail_border)
+        cell(heading + 2, column, value, span=span, bold=column != 1, size=9 if column == 1 else 10,
+             align="center" if column == 1 else "right", border=detail_border, number_format=money_format)
+    sheet.row_dimensions[heading + 1].height = 19.5
+    sheet.row_dimensions[heading + 2].height = 22.5
+    last_row = heading + 3
+    cell(last_row, 1, SAMPLE_LABEL, span=columns, size=9, bold=True, align="center", color="FFA40000")
+    sheet.row_dimensions[last_row].height = 18
 
-    from .sample_documents import mark_workbook
-    mark_workbook(wb)
-    wb.save(output_path)
+    sheet.freeze_panes = "A9"
+    if transactions:
+        sheet.auto_filter.ref = f"A8:{last_column}{last_transaction}"
+    sheet.page_setup.paperSize = sheet.PAPERSIZE_A4
+    sheet.page_setup.orientation = "portrait"
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    sheet.print_options.horizontalCentered = True
+    sheet.page_margins.left = sheet.page_margins.right = 12 / 25.4
+    sheet.page_margins.top = sheet.page_margins.bottom = 16 / 25.4
+    sheet.page_margins.footer = 6 / 25.4
+    sheet.print_area = f"A1:{last_column}{last_row}"
+    sheet.print_title_rows = "8:8"
+    sheet.oddFooter.center.text = "SAMPLE - NOT A BANK-ISSUED DOCUMENT"
+    workbook.save(output_path)
+    workbook.close()
 
 
 def export_normal_certificate(output_path: Path, payload: dict) -> None:

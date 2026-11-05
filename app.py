@@ -3062,7 +3062,7 @@ def _excel_preview_cell_style(cell) -> str:
     if font_color:
         styles.append(f"color:{font_color}")
     fill_color = _openpyxl_color(getattr(fill, "fgColor", None))
-    if fill_color and fill_color.lower() != "#000000" and getattr(fill, "fill_type", None):
+    if fill_color and getattr(fill, "fill_type", None):
         styles.append(f"background-color:{fill_color}")
     if getattr(alignment, "horizontal", None):
         styles.append(f"text-align:{alignment.horizontal}")
@@ -3095,7 +3095,7 @@ def _excel_preview_cell_style(cell) -> str:
     return ";".join(styles)
 
 
-def build_excel_preview_html_bytes(path: Path, title: str = "Statement") -> bytes:
+def build_excel_preview_html_bytes(path: Path, title: str = "Statement", *, normal_statement: bool = False) -> bytes:
     from openpyxl import load_workbook  # noqa: E402
     from openpyxl.utils import get_column_letter, range_boundaries  # noqa: E402
 
@@ -3120,12 +3120,17 @@ def build_excel_preview_html_bytes(path: Path, title: str = "Statement") -> byte
 
     max_row = meaningful_max_row
     max_col = min(meaningful_max_col, 80)
-    colgroup = []
+    column_widths = []
     for col_index in range(1, max_col + 1):
         letter = get_column_letter(col_index)
         width = worksheet.column_dimensions[letter].width
-        pixel_width = max(36, round(float(width or 10) * 7 + 8))
-        colgroup.append(f'<col style="width:{pixel_width}px">')
+        column_widths.append(float(width or 10) * 7 + 5)
+    total_width = sum(column_widths)
+    colgroup = [
+        f'<col style="width:{100 * width / total_width:.8f}%">' if normal_statement
+        else f'<col style="width:{max(36, round(width + 3))}px">'
+        for width in column_widths
+    ]
 
     rows_html = []
     for row_index in range(1, max_row + 1):
@@ -3146,22 +3151,45 @@ def build_excel_preview_html_bytes(path: Path, title: str = "Statement") -> byte
             if style:
                 attrs.append(f'style="{escape(style, quote=True)}"')
             value = _excel_preview_cell_text(cell)
-            cells_html.append(f"<td {' '.join(attrs)}>{escape(value)}</td>")
+            tag = "th" if normal_statement and row_index == 8 else "td"
+            if normal_statement and tag == "th" and value == "CHEQUE NO.":
+                value = "CHEQUE\nNO."
+            cells_html.append(f"<{tag} {' '.join(attrs)}>{escape(value)}</{tag}>")
         rows_html.append(f"<tr{row_style}>{''.join(cells_html)}</tr>")
+    last_transaction = range_boundaries(worksheet.auto_filter.ref)[3] if normal_statement and worksheet.auto_filter.ref else 8
     workbook.close()
+    columns = f"<colgroup>{''.join(colgroup)}</colgroup>"
+    if normal_statement:
+        table = (
+            f'<table class="normal-statement">{columns}<tbody>{"".join(rows_html[:7])}</tbody></table>'
+            f'<table class="normal-statement">{columns}<thead>{rows_html[7]}</thead>'
+            f'<tbody>{"".join(rows_html[8:last_transaction])}</tbody>'
+            f'<tbody class="statement-summary">{"".join(rows_html[last_transaction:])}</tbody></table>'
+        )
+        paper_style = """
+@page { size: A4 portrait; margin: 16mm 12mm; }
+body { margin:0; color:#000000; font-family:Arial,sans-serif; }
+.normal-statement { border-collapse:collapse; table-layout:fixed; width:100%; margin:0; print-color-adjust:exact; -webkit-print-color-adjust:exact; }
+.normal-statement td,.normal-statement th { box-sizing:border-box; padding:0 3px; white-space:pre-wrap; line-height:1.15; overflow-wrap:anywhere; }
+.normal-statement thead { display:table-header-group; }
+.statement-summary { break-inside:avoid; }
+"""
+    else:
+        table = f"<table>{columns}<tbody>{''.join(rows_html)}</tbody></table>"
+        paper_style = """
+@page { size: A4; margin: 10mm; }
+body { margin: 0; background: #fff; font-family: Calibri, Arial, sans-serif; color: #16324a; }
+table { border-collapse: collapse; table-layout: fixed; width: 100%; }
+td { min-width: 28px; padding: 4px 6px; white-space: pre-wrap; }
+"""
     html = f"""<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <title>{escape(title)}</title>
-<style>
-@page {{ size: A4; margin: 10mm; }}
-body {{ margin: 0; background: #fff; font-family: Calibri, Arial, sans-serif; color: #16324a; }}
-table {{ border-collapse: collapse; table-layout: fixed; width: 100%; }}
-td {{ min-width: 28px; padding: 4px 6px; white-space: pre-wrap; }}
-</style>
+<style>{paper_style}</style>
 </head>
-<body><table><colgroup>{''.join(colgroup)}</colgroup><tbody>{''.join(rows_html)}</tbody></table></body>
+<body>{table}</body>
 </html>"""
     return sample_html(html).encode("utf-8")
 
@@ -3989,11 +4017,6 @@ class StatementWebHandler(BaseHTTPRequestHandler):
         if export_mode == "normal":
             suffix = ".xlsx" if export_kind == "statement" and not statement_word else ".docx"
             template_name = "normal"
-            body = (
-                build_normal_statement_bytes(export_payload)
-                if export_kind == "statement"
-                else build_normal_certificate_bytes(export_payload)
-            )
         else:
             template_dir = str(payload.get("template_dir") or payload.get("config", {}).get("template_dir") or default_form_values()["template_dir"])
             template_name = str(payload.get("template_name", "")).strip()
@@ -4004,8 +4027,9 @@ class StatementWebHandler(BaseHTTPRequestHandler):
             suffix = '.xlsx' if export_kind=='statement' else '.docx'
 
         filename = default_output_name(export_kind, config.customer_name, template_name or "normal", result.issue_date, suffix)
-        if export_mode == "normal" and preview_html:
-            self._send_download(sample_html(body.decode("utf-8")).encode("utf-8"), filename)
+        if export_mode == "normal" and preview_html and (export_kind == "certificate" or statement_word):
+            body = build_normal_certificate_bytes(export_payload) if export_kind == "certificate" else build_normal_statement_bytes(export_payload)
+            self._send_download(body, Path(filename).with_suffix(".html").name)
             return
 
         WEB_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
@@ -4032,7 +4056,10 @@ class StatementWebHandler(BaseHTTPRequestHandler):
                 convert_office(working_output, output_path)
             if preview_html:
                 if export_kind == "statement" and working_output.suffix.lower() == ".xlsx":
-                    self._send_download(build_excel_preview_html_bytes(working_output, template_name or "Statement"), Path(filename).with_suffix(".html").name)
+                    self._send_download(
+                        build_excel_preview_html_bytes(working_output, template_name or "Statement", normal_statement=export_mode == "normal"),
+                        Path(filename).with_suffix(".html").name,
+                    )
                 elif export_kind == "certificate" and working_output.suffix.lower() == ".docx":
                     self._send_download(build_docx_preview_html_bytes(working_output, template_name or "Balance Certificate"), Path(filename).with_suffix(".html").name)
                 else:

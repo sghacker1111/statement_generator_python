@@ -80,8 +80,28 @@ class ExportNetworkTests(TestCase):
                                 self.assertIn('379,742',text);self.assertIn('Transfer in',text)
                             else:
                                 from openpyxl import load_workbook
-                                workbook=load_workbook(io.BytesIO(body));values=[cell.value for row in workbook.active for cell in row]
-                                self.assertIn(379742,values);self.assertIn('Transfer in',values);workbook.close()
+                                workbook = load_workbook(io.BytesIO(body))
+                                sheet = workbook.active
+                                values = [cell.value for row in sheet for cell in row]
+                                self.assertIn(379742, values)
+                                self.assertIn('Transfer in', values)
+                                self.assertEqual(sheet['A1'].value, 'ACCOUNT STATEMENT')
+                                self.assertEqual([cell.value for cell in sheet[8]], ['DATE', 'DESCRIPTION', 'DEBIT', 'CREDIT', 'BALANCE'])
+                                self.assertIn('B4:C4', sheet.merged_cells)
+                                self.assertAlmostEqual(sheet.column_dimensions['B'].width, 24.7109375)
+                                self.assertEqual(sheet['A8'].fill.fgColor.rgb[-6:], '000000')
+                                self.assertEqual(int(sheet.page_setup.paperSize), 9)
+                                self.assertEqual(sheet.page_setup.orientation, 'portrait')
+                                self.assertEqual((sheet.page_setup.fitToWidth, sheet.page_setup.fitToHeight), (1, 0))
+                                self.assertEqual(sheet.print_title_rows, '$8:$8')
+                                self.assertIn('$A$1:$E$' + str(sheet.max_row), sheet.print_area)
+                                workbook.close()
+                        status, header, body = post({**payload, 'print_preview_html': True})
+                        self.assertEqual(status, 200, body)
+                        self.assertIn('.html', header)
+                        self.assertIn(b'<thead>', body)
+                        self.assertIn(b'size: A4 portrait', body)
+                        self.assertIn(b'background-color:#000000', body)
                         network.assert_not_called()
                         # Selected-format export and print preview must also avoid NRB.
                         source=root/'template.xlsx';source.write_bytes(b'local-template')
