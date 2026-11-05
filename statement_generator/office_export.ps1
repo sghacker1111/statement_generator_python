@@ -750,6 +750,170 @@ function Update-StatementSummaryCells($Worksheet, $HeaderInfo, $DataRange, $Payl
     }
 }
 
+function Set-NativeTemplateField($Worksheet, $Field, $Value, [switch]$Rate) {
+    $cell = $Worksheet.Range([string]$Field.cell)
+    if ($cell.HasFormula) { return }
+    if ($Field.prefix) {
+        $suffix = ""
+        if ($Rate) {
+            $suffix = "%"
+            if ($Field.value -match '^[-\d.\s]+(%.*)$') { $suffix = $Matches[1] }
+        }
+        $original = Convert-ToText $cell.Value2
+        $replacement = (Convert-ToText $Value) + $suffix
+        if (-not $Rate -and $Value -is [double] -and $Field.value -match '^([^\d-]*)(-?[\d,]+)(\.\d+)?(.*)$') {
+            $digits = [Math]::Max(0, $Matches[3].Length - 1)
+            $format = if ($Matches[2].Contains(',')) { "N$digits" } else { "F$digits" }
+            $replacement = $Matches[1] + $Value.ToString($format, [Globalization.CultureInfo]::InvariantCulture) + $Matches[4]
+        }
+        $prefixLength = ([string]$Field.prefix).Length
+        if ($original.StartsWith($Field.prefix) -and $original.Length -gt $prefixLength) {
+            $cell.Characters($prefixLength + 1, $original.Length - $prefixLength).Text = $replacement
+        } else {
+            $cell.Value2 = "'" + $Field.prefix + $replacement
+        }
+    } elseif ($Rate) {
+        if ((Convert-ToText $cell.NumberFormat).Contains("%")) {
+            Set-NumberValue $cell ([double]$Value / 100) ""
+        } elseif ((Convert-ToText $cell.Value2).Contains("%")) {
+            $cell.Value2 = "'" + (Convert-ToText $Value) + "%"
+        } else {
+            Set-NumberValue $cell ([double]$Value) ""
+        }
+    } elseif ($Value -is [string]) {
+        if ($Value -eq "") { Clear-CellValue $cell } else { $cell.Value2 = "'" + $Value }
+    } else {
+        Set-NumberValue $cell ([double]$Value) ""
+    }
+}
+
+function Update-NativeStatementSheet($Workbook, $Payload) {
+    $layout = $Payload.statement_layout
+    $sheet = $Workbook.Worksheets.Item([string]$layout.sheet)
+    $sheet.Activate()
+    $start = [int]$layout.start
+    $end = [int]$layout.end
+    $newEnd = $start + $Payload.statement_rows.Count - 1
+    $delta = $newEnd - $end
+    $formulas = @{}
+    if ($end -ge $start) {
+        $used = $sheet.UsedRange
+        $lastCol = $used.Column + $used.Columns.Count - 1
+        for ($col = $used.Column; $col -le $lastCol; $col++) {
+            $cell = $sheet.Cells.Item($end, $col)
+            if ($cell.HasFormula) { $formulas[$col] = $cell.FormulaR1C1 }
+        }
+    }
+    if ($delta -gt 0) {
+        $insert = [Math]::Max($start, $end)
+        $sheet.Range("${insert}:$($insert + $delta - 1)").EntireRow.Insert() | Out-Null
+        if ($end -ge $start) {
+            $source = $sheet.Rows.Item($end + $delta)
+            for ($row = $insert; $row -lt $insert + $delta; $row++) {
+                $target = $sheet.Rows.Item($row)
+                $source.Copy($target) | Out-Null
+                $target.RowHeight = $source.RowHeight
+            }
+        }
+    } elseif ($delta -lt 0) {
+        $sheet.Range("${newEnd}:$($end - 1)").EntireRow.Delete() | Out-Null
+    }
+    $firstChanged = if ($delta -gt 0) { $end } else { $newEnd }
+    for ($row = $firstChanged; $delta -ne 0 -and $row -le $newEnd; $row++) {
+        foreach ($column in $formulas.Keys) {
+            $sheet.Cells.Item($row, $column).FormulaR1C1 = $formulas[$column]
+        }
+    }
+
+    foreach ($field in $layout.fields.PSObject.Properties) {
+        $key = $field.Name
+        $rate = $key -in @("interest_rate", "tax_rate")
+        $value = if ($rate) { $Payload.rates.$key } else { $Payload.account.$key }
+        if ($null -ne $value) { Set-NativeTemplateField $sheet $field.Value $value -Rate:$rate }
+    }
+    $columns = $layout.columns.PSObject.Properties
+    for ($index = 0; $index -lt $Payload.statement_rows.Count; $index++) {
+        $row = $start + $index
+        $record = $Payload.statement_rows[$index]
+        foreach ($column in $columns) {
+            $key = $column.Name
+            $cell = $sheet.Range("$($column.Value)$row")
+            $value = $record.$key
+            if ($key -in @("date", "txn_date", "value_date")) {
+                if (-not $value) { $value = $record.date }
+                $date = [datetime]::ParseExact($value, "yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture)
+                if ($cell.NumberFormat -in @("General", "@")) { $cell.NumberFormat = "yyyy-mm-dd" }
+                Set-NumberValue $cell $date.ToOADate() ""
+            } elseif ($key -in @("debit", "credit", "balance")) {
+                if ($key -eq "balance" -and $index -gt 0 -and $cell.HasFormula) { continue }
+                if ($key -ne "balance" -and [double]$value -eq 0) {
+                    Clear-CellValue $cell
+                } else {
+                    Set-NumberValue $cell $value ""
+                }
+            } elseif ([string]::IsNullOrEmpty($value)) {
+                Clear-CellValue $cell
+            } else {
+                $cell.Value2 = "'" + $value
+            }
+        }
+    }
+    foreach ($field in $layout.summary.PSObject.Properties) {
+        $match = [regex]::Match($field.Value.cell, '^([A-Z]+)(\d+)$')
+        $address = $match.Groups[1].Value + ([int]$match.Groups[2].Value + $delta)
+        $value = $Payload.summary.($field.Name)
+        if ($null -ne $value) {
+            Set-NativeTemplateField $sheet @{cell=$address; prefix=$field.Value.prefix; value=$field.Value.value} ([double]$value)
+        }
+    }
+    $totalRow = $newEnd + 1
+    $totalLabels = foreach ($column in $columns) { Convert-ToText $sheet.Range("$($column.Value)$totalRow").Value2 }
+    if ($totalLabels -match '^\s*(?:grand |transaction )?totals?\s*:?\s*$') {
+        foreach ($entry in @(@("debit", "total_debit"), @("credit", "total_credit"), @("balance", "final_balance"))) {
+            $address = "$($layout.columns.($entry[0]))$totalRow"
+            Set-NativeTemplateField $sheet @{cell=$address; prefix=""} ([double]$Payload.summary.($entry[1]))
+        }
+    }
+    $headerRange = $sheet.UsedRange
+    $firstCol = $headerRange.Column
+    $lastCol = $firstCol + $headerRange.Columns.Count - 1
+    for ($row = $headerRange.Row; $row -lt $layout.header_row; $row++) {
+        for ($col = $firstCol; $col -le $lastCol; $col++) {
+            $cell = $sheet.Cells.Item($row, $col)
+            $text = Convert-ToText $cell.Value2
+            if ($cell.HasFormula -or $text -notmatch '\b(?:from|statement period)\b') { continue }
+            $matches = [regex]::Matches($text, '(?i)\b(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/](?:\d{1,2}|[a-z]{3,9})[-/]\d{2,4})\b')
+            if ($matches.Count -ne 2) { continue }
+            $dates = @($Payload.statement.period_from_iso, $Payload.statement.period_to_iso)
+            for ($i = 1; $i -ge 0; $i--) {
+                $item = $matches[$i]
+                $parts = $item.Value -split '[-/]'
+                $separator = if ($item.Value.Contains('/')) { '/' } else { '-' }
+                if ($parts[0].Length -eq 4) {
+                    $month = if ($parts[1].Length -eq 2) { 'MM' } else { 'M' }
+                    $day = if ($parts[2].Length -eq 2) { 'dd' } else { 'd' }
+                    $format = "yyyy$separator$month$separator$day"
+                } else {
+                    $day = if ($parts[0].Length -eq 2) { 'dd' } else { 'd' }
+                    $month = if ($parts[1] -match '^\d+$') { if ($parts[1].Length -eq 2) { 'MM' } else { 'M' } } elseif ($parts[1].Length -eq 3) { 'MMM' } else { 'MMMM' }
+                    $year = if ($parts[2].Length -eq 4) { 'yyyy' } else { 'yy' }
+                    $format = "$day$separator$month$separator$year"
+                }
+                $date = ([datetime]::ParseExact($dates[$i], 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)).ToString($format, [Globalization.CultureInfo]::InvariantCulture)
+                $text = $text.Remove($item.Index, $item.Length).Insert($item.Index, $date)
+            }
+            $cell.Value2 = "'" + $text
+        }
+    }
+    $sample = "SAMPLE - NOT A BANK-ISSUED DOCUMENT"
+    $sheet.PageSetup.CenterFooter = ($sheet.PageSetup.CenterFooter + " " + $sample).Trim()
+    $used = $sheet.UsedRange
+    $label = $sheet.Cells.Item($used.Row + $used.Rows.Count + 1, $firstCol)
+    $label.Value2 = $sample
+    $label.Font.Bold = $true
+    $label.Font.Color = 164
+}
+
 function Update-StatementWorkbook($Payload) {
     Copy-Item -LiteralPath $TemplatePath -Destination $OutputPath -Force
     $excel = New-Object -ComObject Excel.Application
@@ -760,6 +924,13 @@ function Update-StatementWorkbook($Payload) {
         $excel.AutomationSecurity = 3
         $excel.AskToUpdateLinks = $false
         $workbook = $excel.Workbooks.Open($OutputPath, 0)
+        if ($Payload.statement_layout) {
+            Update-NativeStatementSheet $workbook $Payload
+            $excel.CalculateFull()
+            $workbook.Save()
+            $workbook.Close($true)
+            return
+        }
         $selectedSheet = $null
         $headerInfo = $null
         foreach ($worksheet in $workbook.Worksheets) {

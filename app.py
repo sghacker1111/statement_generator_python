@@ -67,6 +67,7 @@ from statement_generator.generator import (  # noqa: E402
 )
 from statement_generator.rounding import parse_percentages
 from statement_generator.office_formats import convert_office, editable_office_copy
+from statement_generator.statement_template import scan_statement_layout
 from statement_generator.native_workspace import native_statement_word, page_settings, update_page_settings, repair_native_text
 from statement_generator.document_layout import word_html
 from statement_generator.sample_documents import sample_html
@@ -78,7 +79,7 @@ from statement_generator.selftest import run_tests  # noqa: E402
 from statement_generator.utils import format_amount, interest_rounding_places, json_default, next_business_day, parse_iso_date, resolve_business_day, round_money, safe_filename  # noqa: E402
 
 
-DEFAULT_TEMPLATE_DIR = Path(r"D:\Finance Doc\Format")
+DEFAULT_TEMPLATE_DIR = APP_ROOT / "templates"
 HAMROPATRO_ENGLISH_CALENDAR_URL = "https://english.hamropatro.com/calendar/"
 STATE_FILE = APP_ROOT / "web_statement_generator_state.json"
 USER_STATE_ROOT = APP_ROOT / "user_state"
@@ -1022,7 +1023,7 @@ def _coerce_template_profile(value: object) -> dict[str, str]:
     if not isinstance(value, dict):
         return {}
     profile: dict[str, str] = {}
-    allowed_keys = set(profile_field_keys()) | {"template_dir", "manual_rate", "rate_mode", "rate_type"}
+    allowed_keys = set(profile_field_keys()) | {"template_dir", "statement_template_name", "manual_rate", "rate_mode", "rate_type"}
     for key, raw in value.items():
         if key in allowed_keys and (isinstance(raw, (str, int, float, bool)) or raw is None):
             profile[key] = "" if raw is None else str(raw)
@@ -1507,10 +1508,12 @@ def _scan_excel_template(path: Path, profile: dict[str, str]) -> dict[str, objec
                         "style": {"font_name": "Calibri", "font_size": 11, "wrap_text": True},
                     }
                 )
+    layout = scan_statement_layout(workbook)
     workbook.close()
     return {
         "kind": "statement",
         "file_type": path.suffix.lower(),
+        "statement_layout": layout,
         "summary": {
             "file": path.name,
             "active_cell_count": len(items),
@@ -1713,8 +1716,8 @@ def combined_template_catalog(template_dir_text: str, user_id: int | None = None
             if _template_key("certificate", entry.name) not in hidden_keys
         ],
     )
-    custom_statement_catalog = scan_template_directory(_custom_template_dir("statement", user_id))
-    custom_certificate_catalog = scan_template_directory(_custom_template_dir("certificate", user_id))
+    custom_statement_catalog = scan_template_directory(_custom_template_dir("statement", user_id), uploaded=True)
+    custom_certificate_catalog = scan_template_directory(_custom_template_dir("certificate", user_id), uploaded=True)
     return TemplateCatalog(
         statement_templates=_merge_template_entries(
             _annotated_entries(bundled_catalog.statement_templates, "bundled", False),
@@ -1774,14 +1777,36 @@ def save_uploaded_template(
     target_dir = _custom_template_dir(normalized_kind, user_id)
     base_name = safe_filename(custom_name.strip() or Path(filename).stem)
     output_path = target_dir / f"{base_name}{suffix}"
-    output_path.write_bytes(content)
-    meta = _rescan_and_save_template_meta(normalized_kind, output_path, _coerce_template_profile(profile_payload or {}))
+    from tempfile import TemporaryDirectory
+
+    profile = _coerce_template_profile(profile_payload or {})
+    with TemporaryDirectory(dir=target_dir) as temporary:
+        staged_path = Path(temporary) / output_path.name
+        staged_path.write_bytes(content)
+        scan = scan_template_file(normalized_kind, staged_path, profile)
+        layout = scan.get("statement_layout")
+        if layout:
+            profile.update(layout["profile"])
+            profile["statement_template_name"] = base_name
+            profile["include_cheque_column"] = "Yes" if "cheque_no" in layout["columns"] else "No"
+            profile["date_column_mode"] = "txn_value" if {"txn_date", "value_date"} <= layout["columns"].keys() else "single"
+        meta = {
+            "kind": normalized_kind, "name": base_name, "suffix": suffix,
+            "source": "custom", "editable": suffix in {".xlsx", ".docx"},
+            "profile": profile, "scan": scan, "updated_at": _utc_now_text(),
+        }
+        scan["profile"] = profile
+        _write_template_meta(staged_path, meta)
+        staged_path.replace(output_path)
+        _template_meta_path(staged_path).replace(_template_meta_path(output_path))
     return {
         "kind": normalized_kind,
         "name": base_name,
         "suffix": suffix,
         "source": "custom",
         "editable": suffix in {".xlsx", ".xls", ".docx", ".doc"},
+        "profile": profile,
+        "statement_layout": layout,
         "scan_summary": dict(meta.get("scan", {})).get("summary", {}) if isinstance(meta.get("scan"), dict) else {},
     }
 
@@ -1832,6 +1857,7 @@ def template_detail(kind: str, template_name: str, template_dir_text: str, user_
         _rescan_and_save_template_meta(normalized_kind, selected.path, profile)
     return {
         'page_setup':page_settings(editable_office_copy(selected.path),normalized_kind),
+        "active_sheet": (scan.get("statement_layout") or {}).get("sheet"),
         "kind": normalized_kind,
         "name": selected.name,
         "suffix": selected.path.suffix.lower(),
@@ -3574,9 +3600,19 @@ class StatementWebHandler(BaseHTTPRequestHandler):
                     current_user.id,
                     fields.get("profile_json", "{}"),
                 )
+                saved_profile = None
+                if saved.get("statement_layout"):
+                    name = saved["name"]
+                    existing = {row["name"].casefold() for row in auth_store().list_profile_formats(current_user)["formats"]}
+                    suffix = 2
+                    while name.casefold() in existing:
+                        name = f"{saved['name']} (Excel {suffix})"
+                        suffix += 1
+                    saved_profile = auth_store().save_profile_format(current_user, name, saved["profile"])
                 self._send_json(
                     {
                         "saved_template": saved,
+                        "saved_profile": saved_profile,
                         "templates": serialize_catalog(fields.get("template_dir", default_form_values()["template_dir"]), current_user.id),
                     }
                 )

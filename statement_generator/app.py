@@ -28,7 +28,7 @@ from .holidays import MANUAL_HOLIDAY_SEED_VERSION, SUNDAY_HOLIDAY_START, is_recu
 from .utils import format_amount, interest_rounding_places, parse_iso_date, safe_filename
 
 
-DEFAULT_TEMPLATE_DIR = Path(r"D:\Finance Doc\Format")
+DEFAULT_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 PERSISTENT_RULES_SCHEMA_VERSION = 3
 DESCRIPTION_MODE_OPTIONS = {
     "Label + Name": "label_plus_name",

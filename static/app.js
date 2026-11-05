@@ -366,6 +366,7 @@ function getFormValues() {
   for (const element of form.querySelectorAll("[name]")) {
     values[element.name] = element.value;
   }
+  values.statement_template_name = document.getElementById("statement-template-list")?.value || "";
   return workspaceUI ? workspaceUI.values(values) : values;
 }
 
@@ -377,6 +378,10 @@ function applyFormValues(values) {
     }
   }
   workspaceUI?.applied(values);
+  const templateList = document.getElementById("statement-template-list");
+  if (values.statement_template_name && templateList && Array.from(templateList.options).some(option => option.value === values.statement_template_name)) {
+    templateList.value = values.statement_template_name;
+  }
   loadRoundingPercentages(values.amount_rounding_percentages);
   const interestRounding = form.elements.interest_rounding_places;
   if (interestRounding) {
@@ -1572,6 +1577,11 @@ async function uploadTemplateFormat() {
     ? document.getElementById("statement-template-list")
     : document.getElementById("certificate-template-list");
   uploadedList.value = payload.saved_template.name;
+  if (payload.saved_profile) {
+    renderProfileFormats(payload.saved_profile);
+    profileFormatSelect.value = payload.saved_profile.name;
+    appendLog(`Created statement profile ${payload.saved_profile.name} from the Excel workbook.`);
+  }
   document.getElementById("template-manage-name").value = "";
   fileInput.value = "";
   appendLog(`Saved custom ${payload.saved_template.kind} format ${payload.saved_template.name}.`);
@@ -3155,10 +3165,12 @@ function renderVisualFormatWorkspace(detail, selectedKey = "") {
   const items = templateEditorItems(detail);
   const summary = templateEditorSummary(detail);
   const kind = detail?.kind === "certificate" ? "Word Certificate" : "Excel Statement";
+  const layout = detail?.statement_layout || detail?.scan?.statement_layout;
   formatWorkspaceTitle.textContent = `${kind}: ${detail?.name || "Selected Format"}`;
   formatWorkspaceSummary.textContent = [
     `${items.length} editable cells/text blocks loaded`,
     summary.file || summary.source_extension || detail?.suffix || detail?.source_extension || "",
+    layout ? `Statement in ${layout.sheet}, header row ${layout.header_row}. Detected fields: ${Object.entries(layout.fields).map(([name, field]) => name.replaceAll("_", " ") + " (" + field.cell + ")").join(", ")}` : "",
     detail?.editable ? "custom format can be saved" : "bundled format is view-only",
   ].filter(Boolean).join(" | ");
   state.formatWorkspaceSelectedKey = "";

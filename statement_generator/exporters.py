@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
+import re
 import shutil
 import subprocess
 import sys
@@ -56,13 +57,18 @@ class TemplateCatalog:
     certificate_templates: list[TemplateEntry]
 
 
-def scan_template_directory(directory: Path) -> TemplateCatalog:
+def scan_template_directory(directory: Path, *, uploaded: bool = False) -> TemplateCatalog:
     statement_templates: list[TemplateEntry] = []
     certificate_templates: list[TemplateEntry] = []
     if not directory.exists():
         return TemplateCatalog(statement_templates, certificate_templates)
 
     for path in sorted(directory.iterdir(), key=lambda item: item.name.lower()):
+        if not path.is_file() or (not uploaded and re.fullmatch(
+            r"elba|anterkriya(?: \(sana kishan\))?|model (?:[1-9]|1[0-4])|siddha akala|sitapakha",
+            path.stem, re.IGNORECASE,
+        )):
+            continue
         suffix = path.suffix.lower()
         if suffix in STATEMENT_EXTENSIONS:
             statement_templates.append(TemplateEntry(path.stem, path))
@@ -264,6 +270,19 @@ def _run_export(mode: str, template_path: Path, output_path: Path, payload: dict
 
 
 def export_statement(template_path: Path, output_path: Path, payload: dict) -> None:
+    if template_path.suffix.lower() == ".xlsx":
+        from openpyxl import load_workbook
+
+        from .statement_template import scan_statement_layout
+
+        workbook = load_workbook(template_path, rich_text=True)
+        try:
+            layout = scan_statement_layout(workbook)
+        finally:
+            workbook.close()
+        if layout is None:
+            raise ValueError("The Excel format needs Date, Description, Debit, Credit and Balance column headings.")
+        payload = {**payload, "statement_layout": layout}
     _run_export("statement", template_path, output_path, payload)
 
 

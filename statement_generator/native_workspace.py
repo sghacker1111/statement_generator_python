@@ -62,7 +62,10 @@ def native_statement_word(path: Path, payload: dict) -> None:
 def page_settings(path: Path, kind: str) -> dict:
     if kind=='statement':
         from openpyxl import load_workbook
-        book=load_workbook(path);sheet=book.active
+        from .statement_template import scan_statement_layout
+        book=load_workbook(path,rich_text=True)
+        layout=scan_statement_layout(book)
+        sheet=book[layout["sheet"]] if layout else book.active
         result={side:round(getattr(sheet.page_margins,side)*25.4,2) for side in ['top','right','bottom','left']}
         result['orientation']=sheet.page_setup.orientation or 'portrait';book.close();return result
     from docx import Document
@@ -75,7 +78,10 @@ def update_page_settings(path: Path, kind: str, settings: dict) -> None:
     landscape=settings.get('orientation')=='landscape'
     if kind=='statement':
         from openpyxl import load_workbook
-        book=load_workbook(path);sheet=book.active
+        from .statement_template import scan_statement_layout
+        book=load_workbook(path,rich_text=True)
+        layout=scan_statement_layout(book)
+        sheet=book[layout["sheet"]] if layout else book.active
         for side,value in values.items():setattr(sheet.page_margins,side,value/25.4)
         sheet.page_setup.orientation='landscape' if landscape else 'portrait';book.save(path);book.close();return
     from docx import Document

@@ -369,7 +369,7 @@
             <div class="normal-export inset-panel">
               <div>
                 <h3>Format Manager</h3>
-                <p>Upload custom statement and certificate format files here to add or replace named formats. Built-in bundled formats stay read-only.</p>
+                <p>Upload your Excel statement or Word certificate format. Excel uploads create a reusable statement profile from the detected account fields.</p>
               </div>
               <div class="field-grid two-col">
                 <label class="field">
@@ -392,7 +392,7 @@
                 <button type="button" class="primary-button" id="statement-format-builder-open-btn">Create Statement Format</button>
                 <button type="button" class="ghost-button" id="template-delete-btn">Delete Selected Format</button>
               </div>
-              <p class="admin-subnote">The Python web app uploads real `.xlsx/.xls` statement templates and `.docx/.doc` certificate templates. Custom `.xlsx/.docx` files can be scanned and lightly edited in the browser.</p>
+              <p class="admin-subnote">Excel exports use your saved workbook, including its worksheets, merged cells, fonts, number formats, formulas and page setup. Transaction rows fit above your totals and summary.</p>
               <div class="template-editor inset-panel" id="template-editor-panel" hidden>
                 <div class="template-editor-head">
                   <div>
