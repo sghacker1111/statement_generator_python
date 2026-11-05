@@ -13,6 +13,20 @@ from . import test_import_checks as imported
 
 
 class WorkspaceTests(TestCase):
+    def test_creating_an_imported_profile_preserves_existing_names_and_all_settings(self):
+        with TemporaryDirectory() as temp:
+            store = AuthStore(Path(temp) / 'profiles.db')
+            user = store.create_user('profile-user', 'temporary-password', 'user', 'check_only', full_name='Profile User', mobile_number='000000')
+            profile = {'account_number': '00001234', 'deposit_text': 'Cash Deposited BY:', 'deposit_names': 'First\nSecond',
+                       'amount_rounding_percentages': '{"500":70,"50":20,"5":10}', 'statement_template_name': 'Uploaded format'}
+            store.save_profile_format(user, 'External profile', profile, create_only=True)
+            with self.assertRaisesRegex(ValueError, 'already uses that name'):
+                store.save_profile_format(user, 'external PROFILE', {'deposit_text': 'Must not replace'}, create_only=True)
+            self.assertEqual(store.load_profile_format(user, 'External profile')['profile'], profile)
+            updated = store.save_profile_format(user, 'External profile', {**profile, 'deposit_text': 'Updated label'}, original_name='External profile')
+            self.assertEqual(updated['profile']['account_number'], '00001234')
+            self.assertEqual(updated['profile']['deposit_text'], 'Updated label')
+
     def test_description_check_scopes_ignore_names_and_validate_the_amount_side(self):
         from types import SimpleNamespace
         from dataclasses import asdict

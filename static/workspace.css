@@ -32,3 +32,9 @@ body.statement-expanded .workspace{display:block;grid-template-columns:1fr}body.
 @media print{.statement-preview-tools,.preview-actions{display:none!important}}
 
 .account-recovery-dialog{max-width:500px;width:calc(100% - 40px);border:1px solid #c4d4de;border-radius:14px;padding:24px;background:white;color:#16324a}.account-recovery-dialog::backdrop{background:#0c263c99}.account-recovery-dialog .field{margin:12px 0}.recovery-error{color:#a40000}#recovery-code-list{display:block;width:100%;font:14px monospace;margin:12px 0}.office-page-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px;background:#f4f7fa}.office-page-tools label{display:flex;gap:4px;font-size:12px}.office-page-tools input{width:65px;padding:6px}
+
+#statement-profile-details .form-panel{display:block;border-top:1px solid var(--workspace-border);padding:22px 0;margin-top:20px}
+#statement-profile-details .profile-format-editor{margin:20px 0}
+.profile-output-settings{border-top:1px solid var(--workspace-border);padding-top:20px}
+.profile-output-settings>.field{max-width:560px;margin-top:18px}
+#statement-profile-status{color:var(--workspace-accent);line-height:1.6}

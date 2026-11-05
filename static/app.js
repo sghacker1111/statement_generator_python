@@ -1,4 +1,4 @@
-import { createWorkspace } from "./workspace.js?v=20261028-security-nav";
+import { createWorkspace } from "./workspace.js?v=20261105-profiles";
 import { canGenerateStatements } from "./preview-workspace.js?v=20261007-preview";
 let workspaceUI = null;
 let authBusy = false;
@@ -44,6 +44,7 @@ const state = {
   validationErrors: [],
   profileFormats: [],
   profileFormatEditorMode: "create",
+  profileFormatSaving: false,
   profileFormatEditOriginalName: "",
   templateEditorDetail: null,
   formatWorkspaceSelectedKey: "",
@@ -795,11 +796,16 @@ function updatePrependStatementState() {
 }
 
 function getProfileDraftValues() {
+  updateRoundingPercentagesValue();
   updateMonthlyTransactionCountsValue();
   const values = {};
   for (const element of document.querySelectorAll("#account-panel [name], #statement-panel [name], #texts-panel [name]")) {
     values[element.name] = element.value;
   }
+  for (const name of ["manual_rate", "rate_mode", "rate_type"]) {
+    if (form.elements[name]) values[name] = form.elements[name].value;
+  }
+  values.statement_template_name = workspaceUI?.profileTemplate() ?? document.getElementById("statement-template-list")?.value ?? "";
   return values;
 }
 
@@ -1104,7 +1110,8 @@ function renderHolidayPayload(payload) {
   }
 }
 
-function openProfileFormatEditor(mode = "create") {
+async function openProfileFormatEditor(mode = "create") {
+  if (workspaceUI) return workspaceUI.editProfile(mode);
   state.profileFormatEditorMode = mode;
   state.profileFormatEditOriginalName = profileFormatSelect.value || "";
   profileFormatEditor.dataset.mode = mode;
@@ -1122,7 +1129,8 @@ function openProfileFormatEditor(mode = "create") {
   profileFormatNameInput.select();
 }
 
-function closeProfileFormatEditor() {
+function closeProfileFormatEditor(saved = false) {
+  workspaceUI?.closeProfileEditor(saved);
   profileFormatEditor.hidden = true;
   profileFormatNameInput.value = "";
   state.profileFormatEditorMode = "create";
@@ -4071,7 +4079,7 @@ function getDeviceRegistration() {
 }
 
 async function saveDraftProfile(silent = true) {
-  if (!state.currentUser || workspaceUI?.isChecking()) return;
+  if (!state.currentUser || workspaceUI?.isChecking() || workspaceUI?.isEditingProfile()) return;
   const profile = getProfileDraftValues();
   localStorage.setItem(`${profileStorageKey}:${state.currentUser.id}`, JSON.stringify(profile));
   await fetchJson(apiUrl("profile"), {
@@ -4084,7 +4092,7 @@ async function saveDraftProfile(silent = true) {
 }
 
 function scheduleAutoProfileSave() {
-  if (state.suppressAutoProfileSave || workspaceUI?.isChecking() || !state.currentUser) {
+  if (state.suppressAutoProfileSave || workspaceUI?.isChecking() || workspaceUI?.isEditingProfile() || !state.currentUser) {
     return;
   }
   if (state.autoSaveTimer) {
@@ -4096,37 +4104,49 @@ function scheduleAutoProfileSave() {
 }
 
 async function saveProfileFormat(nameOverride = "") {
+  if (state.profileFormatSaving) return;
   const editorMode = profileFormatEditor.dataset.mode || state.profileFormatEditorMode || "create";
   const originalName = String(profileFormatEditor.dataset.originalName || state.profileFormatEditOriginalName || "").trim();
   const typedName = String(nameOverride || profileFormatNameInput.value || "").trim();
-  const fallbackName = editorMode === "edit" ? originalName : profileFormatSelect.value;
+  const fallbackName = editorMode === "edit" ? originalName : "";
   const name = typedName || String(fallbackName || "").trim();
   if (!name) {
     throw new Error("Enter a profile format name first.");
   }
-  const profile = getProfileDraftValues();
-  let password = "";
-  if (editorMode === "edit" && originalName) {
-    password = await requestPassword("Edit Profile Format", "Enter your account password to edit this saved profile format.");
-    if (!password) {
-      throw new Error("Profile format update was cancelled.");
+  state.profileFormatSaving = true;
+  workspaceUI?.profileSaving(true);
+  try {
+    const profile = getProfileDraftValues();
+    let password = "";
+    if (editorMode === "edit" && originalName) {
+      password = await requestPassword("Edit Profile Format", "Enter your account password to edit this saved profile format.");
+      if (!password) {
+        throw new Error("Profile format update was cancelled.");
+      }
     }
+    const payload = await fetchJson(apiUrl("profile_formats"), {
+      method: "POST",
+      body: JSON.stringify({
+        action: "save",
+        name,
+        profile,
+        original_name: editorMode === "edit" ? originalName : "",
+        password,
+        create_only: editorMode !== "edit",
+      }),
+    });
+    renderProfileFormats(payload);
+    const savedName = payload.name || payload.profile_name || name;
+    profileFormatSelect.value = savedName;
+    closeProfileFormatEditor(true);
+    const generationProfile = document.getElementById("generation-profile-select");
+    if (generationProfile) generationProfile.value = savedName;
+    appendLog(`${editorMode === "edit" ? "Updated" : "Saved"} profile format ${savedName}.`);
+    saveDraftProfile(true).catch(error => appendLog(error.message, "error"));
+  } finally {
+    state.profileFormatSaving = false;
+    workspaceUI?.profileSaving(false);
   }
-  const payload = await fetchJson(apiUrl("profile_formats"), {
-    method: "POST",
-    body: JSON.stringify({
-      action: "save",
-      name,
-      profile,
-      original_name: editorMode === "edit" ? originalName : "",
-      password,
-    }),
-  });
-  renderProfileFormats(payload);
-  const savedName = payload.name || payload.profile_name || name;
-  profileFormatSelect.value = savedName;
-  closeProfileFormatEditor();
-  appendLog(`${editorMode === "edit" ? "Updated" : "Saved"} profile format ${savedName}.`);
 }
 
 async function deleteProfileFormat() {
@@ -4557,7 +4577,7 @@ async function bootstrap() {
   clearCurrentStatement();
   closeProfileFormatEditor();
   setLoginVisible(false);
-  workspaceUI?.reset(payload.defaults);
+  workspaceUI?.reset(payload.defaults, payload.profile_defaults);
   appendLog("Ready. Select a workspace from the left navigation.");
   const refreshEpoch = sessionEpoch;
   globalThis.setTimeout(() => {
@@ -5074,18 +5094,18 @@ function bindEvents() {
     });
   }
 
-  document.getElementById("save-profile-format-btn").addEventListener("click", () => {
+  document.getElementById("save-profile-format-btn").addEventListener("click", async () => {
     try {
-      openProfileFormatEditor("create");
+      await openProfileFormatEditor("create");
     } catch (error) {
       appendLog(error.message, "error");
       alert(error.message);
     }
   });
 
-  document.getElementById("edit-profile-format-btn").addEventListener("click", () => {
+  document.getElementById("edit-profile-format-btn").addEventListener("click", async () => {
     try {
-      openProfileFormatEditor("edit");
+      await openProfileFormatEditor("edit");
     } catch (error) {
       appendLog(error.message, "error");
       alert(error.message);
@@ -5489,6 +5509,7 @@ workspaceUI = createWorkspace({
   state, apiUrl, fetchJson, requestPassword, logout, setTab, getValues:getFormValues, applyValues:applyFormValues,
   clearStatement:clearCurrentStatement, saveDraft:saveDraftProfile, scheduleSave:scheduleAutoProfileSave,
   renderUsers, log:appendLog, loadProfile:loadProfileFormat, importStatement:importStatementFile,
+  getProfileValues: getProfileDraftValues, saveProfile: saveProfileFormat, cancelProfile: closeProfileFormatEditor,
   validateStatement:validateCurrentStatement,
   beginCorrectionEdit() {
     if (state.statementEditMode) return;

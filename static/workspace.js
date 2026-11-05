@@ -1,6 +1,7 @@
-import { setupAccountSecurity } from './account-security.js?v=20261028-native';
 import { setupPdfImport } from './pdf-import.js?v=20261008-detailed';
 import { setupStatementCorrections } from './statement-corrections.js?v=20261008-detailed';
+import { setupAccountSecurity } from './account-security.js?v=20261028-native';
+import { setupStatementProfiles } from './profiles.js?v=20261105-profiles';
 // Shared web workspace for the PHP and Python editions.
 import {canGenerateStatements, setupStatementPreview} from './preview-workspace.js?v=20261007-preview';
 export const DESCRIPTION_ORDERS = {
@@ -44,6 +45,7 @@ export function createWorkspace(h) {
   const clone = value => JSON.parse(JSON.stringify(value));
   const stateKeys = ['generatedSeed','currentStatement','currentStatementId','currentStatementSource','statementEditMode','editableRows','validationErrors'];
   let context = 'generate', view = 'home', drafts = {}, defaults = {}, history = [], period = 'weekly', requestCount = 0, checkProfileRevision = 0;
+  let profileDefaults = {}, profileWorkspace = null;
   const navItems = [
     ['home','Home','Overview & recent activity'], ['generate','Statement Generation','Account, rules & descriptions'],
     ['profiles','Statement Profiles','Save and reuse your setup'], ['check','Statement Check','Import, edit & validate'],
@@ -84,10 +86,9 @@ export function createWorkspace(h) {
   const securityPanel=section('security-panel','Security & Login','Change your password, review account lockout rules and manage admin recovery.');
   const accountSecurity=setupAccountSecurity({panel:securityPanel,apiUrl:h.apiUrl,fetchJson:h.fetchJson,state:h.state,logout:h.logout,requestPassword:h.requestPassword,renderUsers:h.renderUsers,log:h.log});
   home.innerHTML+=`<div class="dashboard-cards"><article><span>Generated in the last 7 days</span><strong id="dashboard-week">0</strong></article><article><span>Generated this month</span><strong id="dashboard-month">0</strong></article><article><span>Saved statements in this view</span><strong id="dashboard-total">0</strong></article></div><div class="dashboard-chart-card"><div class="history-head"><h3>Generation activity</h3><select id="dashboard-period" aria-label="Chart period"><option value="weekly">Last 7 days</option><option value="monthly">Last 12 months</option></select></div><div id="dashboard-chart"></div><p class="muted">Counts reflect the saved history in this view (up to 50 recent records). Imported statements are excluded from generation counts.</p></div><div class="workspace-shortcuts"><button type="button" class="primary-button" data-go="generate">Create a statement</button><button type="button" class="ghost-button" data-go="check">Check an imported statement</button><button type="button" class="ghost-button" data-go="history">Open saved statements</button></div>`;
-  const profiles=section('profiles-panel','Statement Profiles','Load a saved setup, edit Account, Statement Rules or Texts & Names, then save it here for further use.');
+  const profiles=section('profiles-panel','Statement Profiles','Create a complete statement setup, load a saved profile, or import and export profile files for use on another computer.');
   const profileActions=document.createElement('div');profileActions.className='profile-workspace-actions';profiles.append(profileActions);
   for(const id of ['profile-format-select','load-profile-format-btn','save-profile-format-btn','edit-profile-format-btn','delete-profile-format-btn','profile-format-editor']) profileActions.append($(id));
-  profiles.insertAdjacentHTML('beforeend','<div class="workspace-shortcuts"><button type="button" class="ghost-button" data-go="generate">Edit account and rules</button><button type="button" class="ghost-button" data-tab="texts-panel">Edit descriptions and names</button></div>');
   const generationProfiles=document.createElement('div');generationProfiles.id='generation-profile-tools';generationProfiles.className='profile-workspace-actions';generationProfiles.hidden=true;
   generationProfiles.innerHTML='<label class="field"><span>Statement profile</span><select id="generation-profile-select"><option value="">Select a saved profile</option></select></label><button type="button" class="ghost-button" id="load-generation-profile-btn">Load statement profile</button><button type="button" class="ghost-button" data-go="profiles">Manage profiles</button>';
   form.prepend(generationProfiles);
@@ -223,6 +224,7 @@ export function createWorkspace(h) {
     if(!force && requestCount>0) {h.log('Please wait for the current request to finish.');return false;}
     if(adminViews.has(next)&&!h.state.currentUser?.can_manage_users) next='home';
     if(next==='generate' && !canGenerateStatements(h.state.currentUser)) next='profile-setup';
+    if(next!=='profiles' && profileWorkspace?.isOpen()) h.cancelProfile();
     if(next!==view) statementPreview.setExpanded(false);
     if(['generate','profiles','profile-setup'].includes(next)) switchContext('generate');
     if(next==='check')switchContext('check');
@@ -257,7 +259,16 @@ export function createWorkspace(h) {
     const points=data.map((r,i)=>`${40+i*640/(data.length-1)},${180-r.count/max*140}`).join(' ');
     $('dashboard-chart').innerHTML=`<svg viewBox="0 0 720 220" role="img" aria-label="Generated statements ${period}: ${data.map(r=>`${r.label} ${r.count}`).join(', ')}"><line x1="40" y1="180" x2="680" y2="180" stroke="#d9e2ec"/><text x="8" y="45">${max}</text><text x="14" y="184">0</text><polyline points="${points}" fill="none" stroke="#176f62" stroke-width="3"/>${data.map((r,i)=>`<circle cx="${40+i*640/(data.length-1)}" cy="${180-r.count/max*140}" r="4" fill="#176f62"/><text x="${40+i*640/(data.length-1)}" y="209" text-anchor="middle">${r.label}</text>`).join('')}</svg>`;
   }
+  profileWorkspace = setupStatementProfiles({
+    ...h, defaults: () => profileDefaults, showProfiles: () => navigate('profiles'),
+    pending: delta => { requestCount = Math.max(0, requestCount + delta); },
+  });
   return {
+    editProfile: (...args) => profileWorkspace.open(...args),
+    closeProfileEditor: saved => profileWorkspace.close(saved),
+    isEditingProfile: () => profileWorkspace.isOpen(),
+    profileTemplate: () => profileWorkspace.templateName(),
+    profileSaving(value) { profileWorkspace.setSaving(value); requestCount = Math.max(0, requestCount + (value ? 1 : -1)); },
     navigate, isChecking:()=>context==='check', refreshPreview:()=>{statementPreview.refresh();statementCorrections.refresh();pdfImport.refresh();}, pending(delta){requestCount=Math.max(0,requestCount+delta);},
     values(values) {return checkingValues(h.state.currentUser?.access_mode==='check_only'?{...values,prepend_statement_mode:'No'}:values,context==='check',$('statement-check-mode').value,$('check-profile-name').value,$('check-extra-enabled').checked?'labels_extra':'labels');},
     applied(values) {
@@ -279,7 +290,7 @@ export function createWorkspace(h) {
       statementPreview.refresh();
     },
     managedUser(user){for(const key of ['full_name','mobile_number','email','address','gender'])$(`detail-${key}`).value=user?.[key]||'';for(const key of ['is_hidden','is_blocked'])$(`detail-${key}`).checked=Boolean(user?.[key]);},
-    reset(values={}) {pdfImport.reset();statementCorrections.reset();checkProfileRevision++;$('check-extra-enabled').checked=false;$('generation-profile-select').value='';drafts={};defaults=clone(values);context='generate';requestCount=0; $('statement-check-mode').value='new';$('check-profile-name').value='';syncDescriptions();renderDashboard();navigate('home',true);},
+    reset(values={}, cleanValues=values) {profileWorkspace.reset();profileDefaults=clone(cleanValues);pdfImport.reset();statementCorrections.reset();checkProfileRevision++;$('check-extra-enabled').checked=false;$('generation-profile-select').value='';drafts={};defaults=clone(values);context='generate';requestCount=0; $('statement-check-mode').value='new';$('check-profile-name').value='';syncDescriptions();renderDashboard();navigate('home',true);},
     prepareImport() {if(!navigate('check'))throw new Error('Wait for the current request before importing.');if($('statement-check-mode').value==='profile'&&!$('check-profile-name').value)throw new Error('Select a saved statement profile before importing.');},
   };
 }

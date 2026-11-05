@@ -837,6 +837,7 @@ class AuthStore(AccountSecurityMixin):
         name: str,
         profile_payload: dict[str, object],
         original_name: str | None = None,
+        create_only: bool = False,
     ) -> dict[str, object]:
         normalized_name = " ".join(name.split()).strip()
         if not normalized_name:
@@ -859,6 +860,8 @@ class AuthStore(AccountSecurityMixin):
                 break
         if original_key and target_key and target_key != original_key:
             raise ValueError("Another profile format is already using that name.")
+        if create_only and target_key:
+            raise ValueError("A statement profile already uses that name. Enter a different name for the new profile.")
         if original_key and original_key != normalized_name and original_key in formats:
             formats.pop(original_key, None)
         formats[normalized_name] = self._sanitize_profile_payload(profile_payload)

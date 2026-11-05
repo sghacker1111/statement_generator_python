@@ -3365,6 +3365,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
                 payload = {
                     "current_user": current_user.as_payload(),
                     "defaults": defaults,
+                    "profile_defaults": default_form_values(),
                     "description_modes": list(DESCRIPTION_MODE_OPTIONS.keys()),
                     "amount_rounding_modes": AMOUNT_ROUNDING_OPTIONS,
                     "rate_modes": ["Auto (NRB)", "Manual"],
@@ -3574,6 +3575,7 @@ class StatementWebHandler(BaseHTTPRequestHandler):
                     str(payload.get("name", "")),
                     profile,
                     original_name=original_name or None,
+                    create_only=bool(payload.get("create_only")),
                 )
                 auth_store().log_activity(current_user.id, current_user.username, "save_profile_format", f"Saved profile format {saved.get('name', '')}.")
                 self._send_json(saved)
