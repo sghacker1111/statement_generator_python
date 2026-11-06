@@ -49,6 +49,7 @@ export function setupStatementProfiles(h) {
   let previousSelection = "";
   let active = false;
   let saving = false;
+  let exporting = false;
   const sections = ["account-panel", "statement-panel", "texts-panel"].map($);
   const exchangeFields = ["rate_mode", "manual_rate", "rate_type"].map(name => form.elements[name]?.closest("label")).filter(Boolean);
   const moved = [...sections, ...exchangeFields].map(node => {
@@ -162,22 +163,51 @@ export function setupStatementProfiles(h) {
     await open("import", imported);
   });
   $("export-statement-profile-btn").onclick = () => run(async () => {
+    if (exporting) return;
     const owner = h.state.currentUser?.id;
     const name = $("profile-format-select").value;
     if (!name) throw new Error("Select a saved statement profile to export.");
     const filename = name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_") + ".json";
-    const handle = window.showSaveFilePicker ? await window.showSaveFilePicker({
-      suggestedName: filename, types: [{description: "Statement profile", accept: {"application/json": [".json"]}}],
-    }) : null;
-    const saved = await h.fetchJson(h.apiUrl("profile_formats", {name}), {method: "GET"});
-    if (owner !== h.state.currentUser?.id) throw new Error("Your signed-in account changed. Export the profile again.");
-    const profile = parseProfileFile(JSON.stringify(saved), Object.keys(h.getProfileValues()), name);
-    const text = profileFile(name, profile.profile);
-    if (handle) {
-      const stream = await handle.createWritable();
-      try { await stream.write(text); await stream.close(); }
-      catch (error) { await stream.abort(); throw error; }
-    } else {
+    exporting = true;
+    $("export-statement-profile-btn").disabled = true;
+    status.textContent = "Preparing the JSON profile file…";
+    try {
+      const saved = await h.fetchJson(h.apiUrl("profile_formats", {name}), {method: "GET"});
+      if (owner !== h.state.currentUser?.id) throw new Error("Your signed-in account changed. Export the profile again.");
+      const profile = parseProfileFile(JSON.stringify(saved), Object.keys(h.getProfileValues()), name);
+      const text = profileFile(name, profile.profile);
+      if (typeof window.showSaveFilePicker === "function") {
+        let handle = null;
+        try {
+          handle = await window.showSaveFilePicker({
+            suggestedName: filename, types: [{description: "Statement profile", accept: {"application/json": [".json"]}}],
+          });
+        } catch (error) {
+          if (error.name === "AbortError") {
+            status.textContent = "Profile export cancelled.";
+            return;
+          }
+        }
+        if (owner !== h.state.currentUser?.id) throw new Error("Your signed-in account changed. Export the profile again.");
+        if (handle) {
+          let stream = null;
+          try {
+            stream = await handle.createWritable();
+            await stream.write(text);
+            await stream.close();
+            stream = null;
+            const file = await handle.getFile();
+            if (await file.text() !== text) throw new Error("The saved profile file is incomplete.");
+            status.textContent = `Profile saved successfully as ${file.name || filename}.`;
+            return;
+          } catch {
+            // A denied or interrupted direct write can still be downloaded.
+            if (stream) {
+              try { await stream.abort(); } catch { /* The stream may already be closed. */ }
+            }
+          }
+        }
+      }
       const url = URL.createObjectURL(new Blob([text], {type: "application/json"}));
       const link = document.createElement("a");
       link.href = url;
@@ -185,9 +215,12 @@ export function setupStatementProfiles(h) {
       document.body.append(link);
       link.click();
       link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      status.textContent = `JSON download started for ${filename}. Check your browser's Downloads if no Save dialog appears.`;
+    } finally {
+      exporting = false;
+      $("export-statement-profile-btn").disabled = false;
     }
-    status.textContent = "Profile exported. Save the JSON file to your computer or external drive.";
   });
   return {
     open, close,

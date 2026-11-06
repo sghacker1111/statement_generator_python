@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
 const vm = require("node:vm");
 const {test} = require("node:test");
 const {JSDOM} = require("jsdom");
@@ -135,4 +136,95 @@ test("profile save sends create-only protection and releases the form after a se
   assert.equal(sent.original_name, "");
   assert.equal(context.state.profileFormatSaving, false);
   assert.deepEqual(busy, [true, false]);
+});
+
+test("Save As prepares JSON before the picker and verifies the complete file written to disk", async t => {
+  const {dom, document, h, saved, downloads, context} = fixture();
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "statement-profile-export-"));
+  const destination = path.join(directory, "Saved profile.json");
+  t.after(() => {
+    if (fs.existsSync(destination)) fs.unlinkSync(destination);
+    fs.rmdirSync(directory);
+  });
+  let prepared = false;
+  let closed = false;
+  saved.profile.customer_name = "Āshā गुरुङ";
+  h.fetchJson = async () => {prepared = true; return saved;};
+  dom.window.showSaveFilePicker = async () => {
+    assert.equal(prepared, true);
+    return {
+      createWritable: async () => ({
+        write: async text => fs.writeFileSync(destination, text, "utf8"),
+        close: async () => {closed = true;},
+      }),
+      getFile: async () => {
+        assert.equal(closed, true);
+        return {name: path.basename(destination), text: async () => fs.readFileSync(destination, "utf8")};
+      },
+    };
+  };
+  await document.getElementById("export-statement-profile-btn").onclick();
+  const text = fs.readFileSync(destination, "utf8");
+  assert.ok(Buffer.byteLength(text) > 0);
+  const imported = context.parseProfileFile(text, Object.keys(h.getProfileValues()));
+  assert.equal(imported.profile.deposit_names, "First\nSecond");
+  assert.equal(imported.profile.bank_name, "Saved bank");
+  assert.equal(imported.profile.customer_name, "Āshā गुरुङ");
+  assert.deepEqual(downloads, []);
+  assert.match(document.getElementById("statement-profile-status").textContent, /saved successfully as Saved profile.json/);
+  assert.equal(document.getElementById("export-statement-profile-btn").disabled, false);
+});
+
+test("a blocked Save dialog falls back to a complete JSON download", async () => {
+  const {dom, document, downloads, blob} = fixture();
+  dom.window.showSaveFilePicker = async () => {throw Object.assign(new Error("Not permitted"), {name: "SecurityError"});};
+  await document.getElementById("export-statement-profile-btn").onclick();
+  assert.deepEqual(downloads, ["Existing.json"]);
+  assert.equal(JSON.parse(await blob().text()).profile.deposit_names, "First\nSecond");
+  assert.match(document.getElementById("statement-profile-status").textContent, /download started/);
+});
+
+test("write, close and empty-file failures each fall back to a full JSON download", async t => {
+  for (const failure of ["open", "write", "close", "empty"]) {
+    await t.test(failure, async () => {
+      const {dom, document, downloads, blob} = fixture();
+      let aborted = false;
+      dom.window.showSaveFilePicker = async () => ({
+        createWritable: async () => {
+          if (failure === "open") throw new Error("Access denied");
+          return {
+            write: async () => {if (failure === "write") throw new Error("Disk write failed");},
+            close: async () => {if (failure === "close") throw new Error("Commit failed");},
+            abort: async () => {aborted = true; throw new Error("Stream already closed");},
+          };
+        },
+        getFile: async () => ({text: async () => ""}),
+      });
+      await document.getElementById("export-statement-profile-btn").onclick();
+      assert.deepEqual(downloads, ["Existing.json"]);
+      assert.equal(JSON.parse(await blob().text()).profile.bank_name, "Saved bank");
+      if (failure === "write" || failure === "close") assert.equal(aborted, true);
+      assert.match(document.getElementById("statement-profile-status").textContent, /download started/);
+      assert.equal(document.getElementById("export-statement-profile-btn").disabled, false);
+    });
+  }
+});
+
+test("cancel stops the export and a failed profile request never opens a file dialog", async () => {
+  const {dom, document, h, downloads} = fixture();
+  let prompts = 0;
+  dom.window.showSaveFilePicker = async () => {
+    prompts++;
+    throw Object.assign(new Error("Cancelled"), {name: "AbortError"});
+  };
+  await document.getElementById("export-statement-profile-btn").onclick();
+  assert.equal(prompts, 1);
+  assert.deepEqual(downloads, []);
+  assert.match(document.getElementById("statement-profile-status").textContent, /cancelled/);
+  h.fetchJson = async () => {throw new Error("Profile request failed");};
+  await document.getElementById("export-statement-profile-btn").onclick();
+  assert.equal(prompts, 1);
+  assert.deepEqual(downloads, []);
+  assert.match(document.getElementById("statement-profile-status").textContent, /request failed/);
+  assert.equal(document.getElementById("export-statement-profile-btn").disabled, false);
 });

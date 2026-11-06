@@ -1,7 +1,7 @@
 import { setupPdfImport } from './pdf-import.js?v=20261008-detailed';
 import { setupStatementCorrections } from './statement-corrections.js?v=20261008-detailed';
 import { setupAccountSecurity } from './account-security.js?v=20261028-native';
-import { setupStatementProfiles } from './profiles.js?v=20261105-profiles';
+import { setupStatementProfiles } from './profiles.js?v=20261106-profile-save';
 // Shared web workspace for the PHP and Python editions.
 import {canGenerateStatements, setupStatementPreview} from './preview-workspace.js?v=20261007-preview';
 export const DESCRIPTION_ORDERS = {

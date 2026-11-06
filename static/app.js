@@ -1,4 +1,4 @@
-import { createWorkspace } from "./workspace.js?v=20261105-profiles";
+import { createWorkspace } from "./workspace.js?v=20261106-profile-save";
 import { canGenerateStatements } from "./preview-workspace.js?v=20261007-preview";
 let workspaceUI = null;
 let authBusy = false;
