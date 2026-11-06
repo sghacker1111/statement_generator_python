@@ -65,6 +65,8 @@ export function setupStatementProfiles(h) {
   status.setAttribute("role", "status");
   status.setAttribute("aria-live", "polite");
   actions.after(status);
+  status.insertAdjacentHTML("afterend", '<p class="muted" id="profile-download-help">Your browser controls the save folder. To choose a folder for each export, enable the option to ask where to save downloads in your browser settings.</p>');
+  $("export-statement-profile-btn").setAttribute("aria-describedby", "profile-download-help");
   const editor = document.createElement("div");
   editor.id = "statement-profile-details";
   editor.hidden = true;
@@ -176,38 +178,6 @@ export function setupStatementProfiles(h) {
       if (owner !== h.state.currentUser?.id) throw new Error("Your signed-in account changed. Export the profile again.");
       const profile = parseProfileFile(JSON.stringify(saved), Object.keys(h.getProfileValues()), name);
       const text = profileFile(name, profile.profile);
-      if (typeof window.showSaveFilePicker === "function") {
-        let handle = null;
-        try {
-          handle = await window.showSaveFilePicker({
-            suggestedName: filename, types: [{description: "Statement profile", accept: {"application/json": [".json"]}}],
-          });
-        } catch (error) {
-          if (error.name === "AbortError") {
-            status.textContent = "Profile export cancelled.";
-            return;
-          }
-        }
-        if (owner !== h.state.currentUser?.id) throw new Error("Your signed-in account changed. Export the profile again.");
-        if (handle) {
-          let stream = null;
-          try {
-            stream = await handle.createWritable();
-            await stream.write(text);
-            await stream.close();
-            stream = null;
-            const file = await handle.getFile();
-            if (await file.text() !== text) throw new Error("The saved profile file is incomplete.");
-            status.textContent = `Profile saved successfully as ${file.name || filename}.`;
-            return;
-          } catch {
-            // A denied or interrupted direct write can still be downloaded.
-            if (stream) {
-              try { await stream.abort(); } catch { /* The stream may already be closed. */ }
-            }
-          }
-        }
-      }
       const url = URL.createObjectURL(new Blob([text], {type: "application/json"}));
       const link = document.createElement("a");
       link.href = url;
@@ -216,7 +186,7 @@ export function setupStatementProfiles(h) {
       link.click();
       link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
-      status.textContent = `JSON download started for ${filename}. Check your browser's Downloads if no Save dialog appears.`;
+      status.textContent = `JSON download requested for ${filename}. Select the destination in your browser's Save As dialog, or check Downloads.`;
     } finally {
       exporting = false;
       $("export-statement-profile-btn").disabled = false;

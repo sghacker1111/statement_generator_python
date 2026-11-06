@@ -24,10 +24,12 @@ function fixture() {
   const downloads = [];
   dom.window.HTMLAnchorElement.prototype.click = function() { downloads.push(this.download); };
   let blob;
+  const timers = [];
+  const revoked = [];
   const context = vm.createContext({
     document, window: dom.window, Option: dom.window.Option, Blob,
-    URL: {createObjectURL(value) {blob = value; return "blob:profile";}, revokeObjectURL() {}},
-    setTimeout() {},
+    URL: {createObjectURL(value) {blob = value; return "blob:profile";}, revokeObjectURL(url) {revoked.push(url);}},
+    setTimeout(callback, delay) {timers.push({callback, delay});},
   });
   vm.runInContext(source, context);
   let manager;
@@ -48,7 +50,7 @@ function fixture() {
     cancelProfile: () => manager.close(),
   };
   manager = context.setupStatementProfiles(h);
-  return {dom, document, context, h, manager, saved, downloads, blob: () => blob};
+  return {dom, document, context, h, manager, saved, downloads, timers, revoked, blob: () => blob};
 }
 
 test("portable profiles retain descriptions, names, rules and leading zeros while excluding unknown fields", () => {
@@ -138,93 +140,73 @@ test("profile save sends create-only protection and releases the form after a se
   assert.deepEqual(busy, [true, false]);
 });
 
-test("Save As prepares JSON before the picker and verifies the complete file written to disk", async t => {
-  const {dom, document, h, saved, downloads, context} = fixture();
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "statement-profile-export-"));
-  const destination = path.join(directory, "Saved profile.json");
+test("profile download supports changed destination folders without invoking the cancelling picker", async t => {
+  const {dom, document, h, saved, downloads, context, timers, revoked, blob} = fixture();
+  let pickerCalls = 0;
+  dom.window.showSaveFilePicker = async () => {
+    pickerCalls++;
+    throw Object.assign(new Error("Changing the folder was rejected"), {name: "AbortError"});
+  };
+  saved.profile.customer_name = "Āshā गुरुङ";
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "statement-profile-folders-"));
+  const folders = [path.join(directory, "First Folder"), path.join(directory, "Another Folder")];
+  for (const folder of folders) fs.mkdirSync(folder);
   t.after(() => {
-    if (fs.existsSync(destination)) fs.unlinkSync(destination);
+    for (const folder of folders) {
+      const file = path.join(folder, "Saved profile.json");
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+      fs.rmdirSync(folder);
+    }
     fs.rmdirSync(directory);
   });
-  let prepared = false;
-  let closed = false;
-  saved.profile.customer_name = "Āshā गुरुङ";
-  h.fetchJson = async () => {prepared = true; return saved;};
-  dom.window.showSaveFilePicker = async () => {
-    assert.equal(prepared, true);
-    return {
-      createWritable: async () => ({
-        write: async text => fs.writeFileSync(destination, text, "utf8"),
-        close: async () => {closed = true;},
-      }),
-      getFile: async () => {
-        assert.equal(closed, true);
-        return {name: path.basename(destination), text: async () => fs.readFileSync(destination, "utf8")};
-      },
-    };
-  };
-  await document.getElementById("export-statement-profile-btn").onclick();
-  const text = fs.readFileSync(destination, "utf8");
-  assert.ok(Buffer.byteLength(text) > 0);
-  const imported = context.parseProfileFile(text, Object.keys(h.getProfileValues()));
-  assert.equal(imported.profile.deposit_names, "First\nSecond");
-  assert.equal(imported.profile.bank_name, "Saved bank");
-  assert.equal(imported.profile.customer_name, "Āshā गुरुङ");
-  assert.deepEqual(downloads, []);
-  assert.match(document.getElementById("statement-profile-status").textContent, /saved successfully as Saved profile.json/);
-  assert.equal(document.getElementById("export-statement-profile-btn").disabled, false);
-});
-
-test("a blocked Save dialog falls back to a complete JSON download", async () => {
-  const {dom, document, downloads, blob} = fixture();
-  dom.window.showSaveFilePicker = async () => {throw Object.assign(new Error("Not permitted"), {name: "SecurityError"});};
-  await document.getElementById("export-statement-profile-btn").onclick();
-  assert.deepEqual(downloads, ["Existing.json"]);
-  assert.equal(JSON.parse(await blob().text()).profile.deposit_names, "First\nSecond");
-  assert.match(document.getElementById("statement-profile-status").textContent, /download started/);
-});
-
-test("write, close and empty-file failures each fall back to a full JSON download", async t => {
-  for (const failure of ["open", "write", "close", "empty"]) {
-    await t.test(failure, async () => {
-      const {dom, document, downloads, blob} = fixture();
-      let aborted = false;
-      dom.window.showSaveFilePicker = async () => ({
-        createWritable: async () => {
-          if (failure === "open") throw new Error("Access denied");
-          return {
-            write: async () => {if (failure === "write") throw new Error("Disk write failed");},
-            close: async () => {if (failure === "close") throw new Error("Commit failed");},
-            abort: async () => {aborted = true; throw new Error("Stream already closed");},
-          };
-        },
-        getFile: async () => ({text: async () => ""}),
-      });
-      await document.getElementById("export-statement-profile-btn").onclick();
-      assert.deepEqual(downloads, ["Existing.json"]);
-      assert.equal(JSON.parse(await blob().text()).profile.bank_name, "Saved bank");
-      if (failure === "write" || failure === "close") assert.equal(aborted, true);
-      assert.match(document.getElementById("statement-profile-status").textContent, /download started/);
-      assert.equal(document.getElementById("export-statement-profile-btn").disabled, false);
-    });
+  for (const folder of folders) {
+    await document.getElementById("export-statement-profile-btn").onclick();
+    const destination = path.join(folder, "Saved profile.json");
+    const text = await blob().text();
+    fs.writeFileSync(destination, text, "utf8");
+    const imported = context.parseProfileFile(fs.readFileSync(destination, "utf8"), Object.keys(h.getProfileValues()));
+    assert.equal(imported.profile.customer_name, "Āshā गुरुङ");
+    assert.equal(imported.profile.deposit_names, "First\nSecond");
+    assert.equal(imported.profile.bank_name, "Saved bank");
+    assert.match(document.getElementById("statement-profile-status").textContent, /download requested/);
+    assert.doesNotMatch(document.getElementById("statement-profile-status").textContent, /cancelled|saved successfully/);
+    assert.equal(document.getElementById("export-statement-profile-btn").disabled, false);
   }
+  assert.equal(pickerCalls, 0);
+  assert.deepEqual(downloads, ["Existing.json", "Existing.json"]);
+  assert.equal(revoked.length, 0);
+  assert.ok(timers.every(timer => timer.delay >= 60000));
+  for (const timer of timers) timer.callback();
+  assert.deepEqual(revoked, ["blob:profile", "blob:profile"]);
+  assert.match(document.getElementById("profile-download-help").textContent, /choose a folder for each export/);
 });
 
-test("cancel stops the export and a failed profile request never opens a file dialog", async () => {
-  const {dom, document, h, downloads} = fixture();
-  let prompts = 0;
-  dom.window.showSaveFilePicker = async () => {
-    prompts++;
-    throw Object.assign(new Error("Cancelled"), {name: "AbortError"});
-  };
-  await document.getElementById("export-statement-profile-btn").onclick();
-  assert.equal(prompts, 1);
-  assert.deepEqual(downloads, []);
-  assert.match(document.getElementById("statement-profile-status").textContent, /cancelled/);
+test("failed profile loading creates no download and remains retryable", async () => {
+  const {document, h, saved, downloads} = fixture();
   h.fetchJson = async () => {throw new Error("Profile request failed");};
   await document.getElementById("export-statement-profile-btn").onclick();
-  assert.equal(prompts, 1);
   assert.deepEqual(downloads, []);
   assert.match(document.getElementById("statement-profile-status").textContent, /request failed/);
+  assert.equal(document.getElementById("export-statement-profile-btn").disabled, false);
+  h.fetchJson = async () => saved;
+  await document.getElementById("export-statement-profile-btn").onclick();
+  assert.deepEqual(downloads, ["Existing.json"]);
+});
+
+test("exports reject an account change and prevent duplicate download requests", async () => {
+  const {document, h, saved, downloads} = fixture();
+  h.state.currentUser = {id: 1};
+  h.fetchJson = async () => {h.state.currentUser = {id: 2}; return saved;};
+  await document.getElementById("export-statement-profile-btn").onclick();
+  assert.deepEqual(downloads, []);
+  assert.match(document.getElementById("statement-profile-status").textContent, /account changed/);
+  let finish;
+  h.fetchJson = () => new Promise(resolve => {finish = resolve;});
+  const first = document.getElementById("export-statement-profile-btn").onclick();
+  assert.equal(document.getElementById("export-statement-profile-btn").disabled, true);
+  await document.getElementById("export-statement-profile-btn").onclick();
+  finish(saved);
+  await first;
+  assert.deepEqual(downloads, ["Existing.json"]);
   assert.equal(document.getElementById("export-statement-profile-btn").disabled, false);
 });
